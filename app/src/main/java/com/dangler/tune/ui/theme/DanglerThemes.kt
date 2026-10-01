@@ -12,6 +12,8 @@ data class DanglerTheme(
     val accent: Color,      // цвет "в точке"
     val sharp: Color,       // диез/выше
     val flat: Color,        // ниже
+    val blood: Color,       // заливка ноты
+    val bloodDark: Color,
     val textMain: Color,
     val textDim: Color,
     val strobe: Color,
@@ -24,6 +26,8 @@ val ThemeBrutal = DanglerTheme(
     accent = Color(0xFF3DFF88),  // кислотно-зелёный
     sharp = Color(0xFFFF3B3B),
     flat = Color(0xFFFFB020),
+    blood = Color(0xFFFF2B2B),
+    bloodDark = Color(0xFFB3001B),
     textMain = Color(0xFFF2F2F2),
     textDim = Color(0xFF8A8A93),
     strobe = Color(0xFFE8E8E8),
@@ -36,6 +40,8 @@ val ThemeBlood = DanglerTheme(
     accent = Color(0xFF3DFF88),
     sharp = Color(0xFFFF4D4D),
     flat = Color(0xFFFFB020),
+    blood = Color(0xFFFF3B30),
+    bloodDark = Color(0xFF8F0E14),
     textMain = Color(0xFFF5EDED),
     textDim = Color(0xFFA07E7E),
     strobe = Color(0xFFFF2E2E),
@@ -48,6 +54,8 @@ val ThemeAcid = DanglerTheme(
     accent = Color(0xFFB6FF2E),
     sharp = Color(0xFFFF3B3B),
     flat = Color(0xFF2EC4FF),
+    blood = Color(0xFFFF4D2E),
+    bloodDark = Color(0xFF9E1B0E),
     textMain = Color(0xFFEFFFE0),
     textDim = Color(0xFF7E9070),
     strobe = Color(0xFFB6FF2E),

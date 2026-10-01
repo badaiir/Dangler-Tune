@@ -1,15 +1,17 @@
 package com.dangler.tune.ui
 
 import android.Manifest
+import android.app.Application
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dangler.tune.audio.AudioRecorder
 import com.dangler.tune.dsp.NoteUtils
 import com.dangler.tune.dsp.YinPitchDetector
 import com.dangler.tune.model.Tuning
 import com.dangler.tune.model.Tunings
+import com.dangler.tune.sensor.TiltSensor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,12 +38,18 @@ data class TunerState(
     val permissionGranted: Boolean = false,
     val themeIndex: Int = 0,
     val strobePhase: Float = 0f,    // 0..1 фаза движения строба
+    val showStrobe: Boolean = true,
+    val gyroEnabled: Boolean = true,
+    val hapticsEnabled: Boolean = true,
 )
 
-class TunerViewModel : ViewModel() {
+class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(TunerState())
     val state: StateFlow<TunerState> = _state.asStateFlow()
+
+    private val tiltSensor = TiltSensor(application)
+    val tilt: StateFlow<TiltSensor.Tilt> = tiltSensor.tilt
 
     private val recorder = AudioRecorder()
     private val yin = YinPitchDetector()
@@ -70,10 +78,17 @@ class TunerViewModel : ViewModel() {
 
     fun selectTheme(i: Int) { _state.update { it.copy(themeIndex = i) } }
     fun setTolerance(c: Float) { _state.update { it.copy(toleranceCents = c) } }
+    fun setShowStrobe(v: Boolean) { _state.update { it.copy(showStrobe = v) } }
+    fun setHaptics(v: Boolean) { _state.update { it.copy(hapticsEnabled = v) } }
+    fun setGyro(v: Boolean) {
+        _state.update { it.copy(gyroEnabled = v) }
+        if (v && _state.value.isListening) tiltSensor.start() else tiltSensor.stop()
+    }
 
     fun start() {
         if (_state.value.isListening) return
         _state.update { it.copy(isListening = true) }
+        if (_state.value.gyroEnabled) tiltSensor.start()
         recorder.start(viewModelScope) { frame ->
             // фрейм уже 4096; если меньше — пропускаем
             if (frame.size < 4096) return@start
@@ -84,6 +99,7 @@ class TunerViewModel : ViewModel() {
 
     fun stop() {
         recorder.stop()
+        tiltSensor.stop()
         _state.update { it.copy(isListening = false, hasSignal = false) }
     }
 
@@ -143,6 +159,7 @@ class TunerViewModel : ViewModel() {
 
     override fun onCleared() {
         recorder.stop()
+        tiltSensor.stop()
         super.onCleared()
     }
 }
