@@ -49,8 +49,8 @@ class TiltSensor(context: Context) {
                     val ax = event.values[0]
                     val ay = event.values[1]
                     val az = event.values[2]
-                    val roll = Math.toDegrees(atan2(ax, az)).toFloat()
-                    val pitch = Math.toDegrees(atan2(-ay, az)).toFloat()
+                    val roll = Math.toDegrees(atan2(ax.toDouble(), az.toDouble())).toFloat()
+                    val pitch = Math.toDegrees(atan2(-ay.toDouble(), az.toDouble())).toFloat()
                     roll to pitch
                 }
                 else -> {
