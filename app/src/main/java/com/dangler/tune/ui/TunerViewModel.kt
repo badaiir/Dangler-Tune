@@ -121,7 +121,8 @@ class TunerViewModel : ViewModel() {
         // в точке — стоит (Peterson-эффект)
         val cur = _state.value.strobePhase
         val speed = (abs(clamped) / 50f) * 0.06f // на кадр
-        val next = if (inTune) cur else (cur + speed * if (clamped > 0) 1 else -1 + 1f) % 1f
+        val dir = if (clamped > 0) 1f else -1f
+        val next = if (inTune) cur else (cur + speed * dir + 1f) % 1f
 
         _state.update {
             it.copy(
