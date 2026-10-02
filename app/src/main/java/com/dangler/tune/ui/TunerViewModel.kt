@@ -11,7 +11,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.dangler.tune.BuildConfig
 import com.dangler.tune.audio.AudioRecorder
 import com.dangler.tune.dsp.NoteUtils
 import com.dangler.tune.dsp.YinPitchDetector
@@ -176,7 +175,15 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateApkFile() = File(getApplication<Application>().cacheDir, "dangler-update.apk")
 
-    fun currentVersion(): String = BuildConfig.VERSION_NAME
+    fun currentVersion(): String = try {
+        val app = getApplication<Application>()
+        @Suppress("DEPRECATION")
+        app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "?"
+    } catch (_: Exception) {
+        "?"
+    }
+
+    private fun appVersion(): String = currentVersion()
 
     /** manual=true → показываем UpToDate/Error, иначе молча (только бейдж при Available) */
     fun checkForUpdate(manual: Boolean = false) {
@@ -188,7 +195,7 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
                 val next: UpdateUiState = when {
                     rel == null ->
                         if (manual) UpdateUiState.Error("Релизов пока нет") else UpdateUiState.Idle
-                    UpdateManager.isNewer(rel.version, BuildConfig.VERSION_NAME) ->
+                    UpdateManager.isNewer(rel.version, appVersion()) ->
                         UpdateUiState.Available(rel)
                     else ->
                         if (manual) UpdateUiState.UpToDate else UpdateUiState.Idle

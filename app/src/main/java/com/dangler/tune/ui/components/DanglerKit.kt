@@ -85,6 +85,7 @@ fun MonoLabel(
     fontSize: Int = 12,
     bold: Boolean = false,
     letterSpacing: Float = 1.5f,
+    modifier: Modifier = Modifier,
 ) {
     Text(
         text = text,
@@ -93,6 +94,7 @@ fun MonoLabel(
         fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Medium,
         fontFamily = FontFamily.Monospace,
         letterSpacing = letterSpacing.sp,
+        modifier = modifier,
     )
 }
 
