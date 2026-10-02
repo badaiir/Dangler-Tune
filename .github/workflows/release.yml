@@ -1,0 +1,44 @@
+name: Release APK
+
+# Релиз: bump versionName/versionCode → коммит → git tag vX.Y → push --tags.
+# Приложение само подтянет APK через экран Настройки → Обновление.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          APK="DanglerTune-${TAG}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
+          gh release create "$TAG" "$APK" \
+            --title "Dangler Tune $TAG" \
+            --notes "🩸 Брутальный тюнер Dangler. Ставь поверх — приложение умеет обновляться само (Настройки → Обновление)."

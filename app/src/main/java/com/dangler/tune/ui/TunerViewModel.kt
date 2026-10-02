@@ -2,16 +2,24 @@ package com.dangler.tune.ui
 
 import android.Manifest
 import android.app.Application
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.dangler.tune.BuildConfig
 import com.dangler.tune.audio.AudioRecorder
 import com.dangler.tune.dsp.NoteUtils
 import com.dangler.tune.dsp.YinPitchDetector
 import com.dangler.tune.model.Tuning
 import com.dangler.tune.model.Tunings
 import com.dangler.tune.sensor.TiltSensor
+import com.dangler.tune.update.UpdateManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +27,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.abs
 
 data class TunerState(
@@ -37,11 +47,22 @@ data class TunerState(
     val isListening: Boolean = false,
     val permissionGranted: Boolean = false,
     val themeIndex: Int = 0,
-    val strobePhase: Float = 0f,    // 0..1 фаза движения строба
-    val showStrobe: Boolean = true,
     val gyroEnabled: Boolean = true,
     val hapticsEnabled: Boolean = true,
 )
+
+/** Состояние самообновления из GitHub Releases */
+sealed interface UpdateUiState {
+    data object Idle : UpdateUiState
+    data object Checking : UpdateUiState
+    data object UpToDate : UpdateUiState
+    data class Available(val info: UpdateManager.ReleaseInfo) : UpdateUiState
+    data class Downloading(val progress: Float) : UpdateUiState
+    /** APK скачан, но системе запрещено ставить из неизвестных источников */
+    data object NeedsUnknownSources : UpdateUiState
+    data object Installing : UpdateUiState
+    data class Error(val message: String) : UpdateUiState
+}
 
 class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -50,6 +71,9 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val tiltSensor = TiltSensor(application)
     val tilt: StateFlow<TiltSensor.Tilt> = tiltSensor.tilt
+
+    private val _update = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
+    val update: StateFlow<UpdateUiState> = _update.asStateFlow()
 
     private val recorder = AudioRecorder()
     private val yin = YinPitchDetector()
@@ -78,7 +102,6 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectTheme(i: Int) { _state.update { it.copy(themeIndex = i) } }
     fun setTolerance(c: Float) { _state.update { it.copy(toleranceCents = c) } }
-    fun setShowStrobe(v: Boolean) { _state.update { it.copy(showStrobe = v) } }
     fun setHaptics(v: Boolean) { _state.update { it.copy(hapticsEnabled = v) } }
     fun setGyro(v: Boolean) {
         _state.update { it.copy(gyroEnabled = v) }
@@ -133,13 +156,6 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
         val tol = _state.value.toleranceCents
         val inTune = abs(clamped) <= tol && clarity > 0.55f
 
-        // фаза строба: скорость пропорциональна расстройке, направление = знак центов
-        // в точке — стоит (Peterson-эффект)
-        val cur = _state.value.strobePhase
-        val speed = (abs(clamped) / 50f) * 0.06f // на кадр
-        val dir = if (clamped > 0) 1f else -1f
-        val next = if (inTune) cur else (cur + speed * dir + 1f) % 1f
-
         _state.update {
             it.copy(
                 frequencyHz = med,
@@ -152,9 +168,87 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
                 activeString = nearestString,
                 hasSignal = true,
                 inTune = inTune,
-                strobePhase = next,
             )
         }
+    }
+
+    // ── самообновление ──
+
+    private fun updateApkFile() = File(getApplication<Application>().cacheDir, "dangler-update.apk")
+
+    fun currentVersion(): String = BuildConfig.VERSION_NAME
+
+    /** manual=true → показываем UpToDate/Error, иначе молча (только бейдж при Available) */
+    fun checkForUpdate(manual: Boolean = false) {
+        if (_update.value is UpdateUiState.Checking || _update.value is UpdateUiState.Downloading) return
+        _update.value = UpdateUiState.Checking
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val rel = UpdateManager.checkLatest()
+                val next: UpdateUiState = when {
+                    rel == null ->
+                        if (manual) UpdateUiState.Error("Релизов пока нет") else UpdateUiState.Idle
+                    UpdateManager.isNewer(rel.version, BuildConfig.VERSION_NAME) ->
+                        UpdateUiState.Available(rel)
+                    else ->
+                        if (manual) UpdateUiState.UpToDate else UpdateUiState.Idle
+                }
+                withContext(Dispatchers.Main) { _update.value = next }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _update.value =
+                        if (manual) UpdateUiState.Error("Нет связи: ${e.message}") else UpdateUiState.Idle
+                }
+            }
+        }
+    }
+
+    fun downloadUpdate(info: UpdateManager.ReleaseInfo) {
+        _update.value = UpdateUiState.Downloading(0f)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                UpdateManager.downloadApk(info.apkUrl, updateApkFile()) { p ->
+                    _update.value = UpdateUiState.Downloading(p)
+                }
+                withContext(Dispatchers.Main) { fireInstall() }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _update.value = UpdateUiState.Error("Скачивание сорвалось: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun canInstallUnknown(): Boolean =
+        getApplication<Application>().packageManager.canRequestPackageInstalls()
+
+    /** Установка скачанного APK; если нет права — ведём в настройки системы */
+    fun fireInstall() {
+        val app = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= 26 && !app.packageManager.canRequestPackageInstalls()) {
+            _update.value = UpdateUiState.NeedsUnknownSources
+            return
+        }
+        val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", updateApkFile())
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        _update.value = UpdateUiState.Installing
+        app.startActivity(intent)
+    }
+
+    fun openUnknownSourcesSettings() {
+        val app = getApplication<Application>()
+        val intent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${app.packageName}")
+        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        app.startActivity(intent)
+    }
+
+    fun resetUpdateState() {
+        if (_update.value !is UpdateUiState.Downloading) _update.value = UpdateUiState.Idle
     }
 
     override fun onCleared() {

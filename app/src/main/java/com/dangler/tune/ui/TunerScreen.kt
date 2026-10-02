@@ -3,21 +3,10 @@ package com.dangler.tune.ui
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,58 +18,63 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ScreenRotation
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.dangler.tune.model.Tuning
 import com.dangler.tune.model.Tunings
 import com.dangler.tune.ui.components.BloodNote
-import com.dangler.tune.ui.components.DanglerGlassCard
-import com.dangler.tune.ui.components.DanglerHeaderPill
 import com.dangler.tune.ui.components.DanglerSliderRow
-import com.dangler.tune.ui.components.DanglerStatusPill
-import com.dangler.tune.ui.components.DanglerStyle
 import com.dangler.tune.ui.components.DanglerSwitchRow
+import com.dangler.tune.ui.components.MetalBackdrop
 import com.dangler.tune.ui.components.MonoLabel
 import com.dangler.tune.ui.components.SettingsSectionLabel
-import com.dangler.tune.ui.components.StrobeDisplay
 import com.dangler.tune.ui.theme.ALL_THEMES
+import com.dangler.tune.ui.theme.DanglerTheme
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
+/**
+ * v2 — ландшафтный металлический минимализм.
+ * Навигация только свайпами: [0] СТРОЙ | [1] ТЮНЕР | [2] НАСТРОЙКИ.
+ * На тюнере — ничего лишнего: нота на весь экран, кровь внутри неё и есть прибор.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TunerScreen(vm: TunerViewModel = viewModel()) {
     val state by vm.state.collectAsState()
@@ -88,12 +82,18 @@ fun TunerScreen(vm: TunerViewModel = viewModel()) {
     val theme = ALL_THEMES[state.themeIndex.coerceIn(ALL_THEMES.indices)]
     val ctx = LocalContext.current
     val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+
+    val pagerState = rememberPagerState(initialPage = 1) { 3 }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> vm.onPermissionResult(granted) }
 
-    LaunchedEffect(Unit) { vm.checkPermission(ctx) }
+    LaunchedEffect(Unit) {
+        vm.checkPermission(ctx)
+        vm.checkForUpdate(manual = false) // молча, только бейдж
+    }
 
     var wasInTune by remember { mutableStateOf(false) }
     LaunchedEffect(state.inTune) {
@@ -103,383 +103,312 @@ fun TunerScreen(vm: TunerViewModel = viewModel()) {
         wasInTune = state.inTune
     }
 
-    var drawerOpen by remember { mutableStateOf(false) }
-
-    // свайп влево по экрану = открыть меню
-    var openAccum by remember { mutableFloatStateOf(0f) }
-    val swipeOpenModifier = if (!drawerOpen) {
-        Modifier.pointerInput(Unit) {
-            detectHorizontalDragGestures(
-                onDragEnd = {
-                    if (openAccum < -90f) drawerOpen = true
-                    openAccum = 0f
-                }
-            ) { _, dragAmount ->
-                if (dragAmount < 0) openAccum += dragAmount else openAccum = 0f
-            }
-        }
-    } else Modifier
-
     Box(
         Modifier
             .fillMaxSize()
             .background(theme.background)
-            .then(swipeOpenModifier)
+            .systemBarsPadding()
     ) {
+        MetalBackdrop(
+            baseTop = theme.background,
+            baseBottom = Color.Black,
+            modifier = Modifier.fillMaxSize()
+        )
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+            when (page) {
+                0 -> TuningsPage(
+                    theme = theme,
+                    current = state.tuning,
+                    onSelect = {
+                        vm.selectTuning(it)
+                        scope.launch { pagerState.animateScrollToPage(1) }
+                    }
+                )
+                1 -> TunerPage(
+                    vm = vm,
+                    state = state,
+                    theme = theme,
+                    pagerState = pagerState,
+                    tiltRoll = if (state.gyroEnabled) tilt.rollDeg else 0f,
+                    tiltPitch = if (state.gyroEnabled) tilt.pitchDeg else 0f,
+                    onRequestMic = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                )
+                2 -> SettingsPage(vm = vm, state = state, theme = theme)
+            }
+        }
+    }
+}
+
+// ── стр. 1: ТЮНЕР ─────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun TunerPage(
+    vm: TunerViewModel,
+    state: TunerState,
+    theme: DanglerTheme,
+    pagerState: PagerState,
+    tiltRoll: Float,
+    tiltPitch: Float,
+    onRequestMic: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val update by vm.update.collectAsState()
+
+    Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            // ── шапка: пилюля + видная шестерёнка ──
             Row(
                 Modifier
+                    .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                DanglerHeaderPill {
-                    Text(
-                        "DANGLER",
-                        color = theme.textMain,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 3.sp
-                    )
-                    Text(
-                        "• ${state.tuning.name}",
-                        color = theme.blood,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-                // шестерёнка: фиксированное место, контрастный кружок с кровавым бордером
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(CircleShape)
-                        .background(theme.surface)
-                        .border(1.2.dp, theme.blood.copy(alpha = 0.6f), CircleShape)
-                        .clickable { drawerOpen = true },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Settings, "Меню", tint = theme.textMain, modifier = Modifier.size(24.dp))
-                }
-            }
-
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (!state.permissionGranted) {
-                    Button(
-                        onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
-                        colors = ButtonDefaults.buttonColors(containerColor = theme.accent, contentColor = Color.Black)
-                    ) { Text("Разрешить микрофон") }
-                    Spacer(Modifier.height(12.dp))
-                }
-
-                // статус-пилюля
-                DanglerStatusPill(
-                    text = when {
-                        !state.hasSignal -> "СЛУШАЮ…"
-                        state.inTune -> "★ В ТОЧКЕ ★"
-                        state.cents > 0 -> "ВЫШЕ ▲"
-                        else -> "НИЖЕ ▼"
-                    },
-                    isActive = state.inTune && state.hasSignal,
-                    activeColor = theme.accent,
-                    textDim = theme.textDim,
-                )
-
-                Spacer(Modifier.height(10.dp))
-
-                // ── строб (Peterson vibe), отключаемый ──
-                if (state.showStrobe) {
-                    DanglerGlassCard(Modifier.fillMaxWidth()) {
-                        StrobeDisplay(
-                            cents = state.cents,
-                            phase = state.strobePhase,
-                            inTune = state.inTune,
-                            hasSignal = state.hasSignal,
-                            strobeColor = theme.strobe,
-                            inTuneColor = theme.accent,
-                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                }
-
-                // ── HERO: кровавая нота ──
+                // нота — 70% ширины, вся высота
                 BloodNote(
                     note = state.noteName.ifBlank { "—" },
                     cents = state.cents,
                     inTune = state.inTune,
                     hasSignal = state.hasSignal,
-                    tiltRollDeg = if (state.gyroEnabled) tilt.rollDeg else 0f,
-                    tiltPitchDeg = if (state.gyroEnabled) tilt.pitchDeg else 0f,
+                    tiltRollDeg = tiltRoll,
+                    tiltPitchDeg = tiltPitch,
                     blood = theme.blood,
                     bloodDark = theme.bloodDark,
                     accent = theme.accent,
+                    steel = theme.steel,
+                    steelDark = theme.steelDark,
                     dim = theme.textDim,
                     modifier = Modifier
-                        .fillMaxWidth()
                         .weight(1f)
+                        .fillMaxHeight()
                 )
-
-                // частота + подсказка (моно, как в Gloryhole)
-                MonoLabel(
-                    text = if (state.hasSignal)
-                        String.format("%.1f Hz → %.1f Hz", state.frequencyHz, state.targetFreq)
-                    else "сыграй струну…",
-                    color = theme.textDim,
-                    fontSize = 13,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    when {
-                        !state.hasSignal -> "кровь ждёт звука"
-                        state.inTune -> "★ В ТОЧКЕ ★"
-                        state.cents > 0 -> "▲ +${abs(state.cents).toInt()} — ослабь"
-                        else -> "▼ −${abs(state.cents).toInt()} — подтяни"
-                    },
-                    color = when {
-                        !state.hasSignal -> theme.textDim
-                        state.inTune -> theme.accent
-                        state.cents > 0 -> theme.sharp
-                        else -> theme.flat
-                    },
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
-
-                Spacer(Modifier.height(10.dp))
-
-                // ── струны строя, в порядке строя ──
-                MonoLabel(text = "СТРУНЫ • ${state.tuning.subtitle}", color = theme.textDim, fontSize = 10)
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    state.tuning.strings.sortedBy { it.stringNumber }.forEach { s ->
-                        val active = state.activeString?.stringNumber == s.stringNumber
-                        val bg = if (active && state.inTune) theme.accent
-                        else if (active) theme.textMain else theme.surface
-                        val fg = if (active) Color.Black else theme.textMain
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(bg)
-                                .border(
-                                    1.dp,
-                                    if (active) theme.accent else theme.textDim.copy(alpha = 0.3f),
-                                    RoundedCornerShape(10.dp)
-                                )
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(s.name, color = fg, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                                Text(
-                                    "${s.stringNumber}",
-                                    color = if (active) fg.copy(alpha = 0.7f) else theme.textDim,
-                                    fontSize = 10.sp
-                                )
-                            }
-                        }
+                // правая колонка: струна + центы, и больше ничего
+                Column(
+                    Modifier.width(118.dp),
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    if (!state.permissionGranted) {
+                        Button(
+                            onClick = onRequestMic,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = theme.accent,
+                                contentColor = Color.Black
+                            )
+                        ) { Text("МИК", fontWeight = FontWeight.Black) }
+                    } else {
+                        Text(
+                            text = state.activeString?.name ?: "—",
+                            color = theme.textMain,
+                            fontSize = 30.sp,
+                            fontWeight = FontWeight.Black,
+                        )
+                        MonoLabel(
+                            text = if (state.activeString != null)
+                                "СТРУНА ${state.activeString!!.stringNumber}" else "—",
+                            color = theme.textDim,
+                            fontSize = 10,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = when {
+                                !state.hasSignal -> ""
+                                state.inTune -> "OK"
+                                state.cents > 0 -> "+${abs(state.cents).toInt()}"
+                                else -> "−${abs(state.cents).toInt()}"
+                            },
+                            color = when {
+                                !state.hasSignal -> Color.Transparent
+                                state.inTune -> theme.accent
+                                state.cents > 0 -> theme.sharp
+                                else -> theme.flat
+                            },
+                            fontSize = 30.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        )
+                        MonoLabel(
+                            text = if (state.hasSignal)
+                                String.format("%.1f/%.1f", state.frequencyHz, state.targetFreq)
+                            else "ТИШИНА",
+                            color = theme.textDim,
+                            fontSize = 10,
+                        )
                     }
                 }
-                Spacer(Modifier.height(18.dp))
             }
-        }
-
-        // ── кромка-подсказка свайпа ──
-        if (!drawerOpen) {
-            SwipeEdgeHint(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                blood = theme.blood,
-                onClick = { drawerOpen = true }
-            )
-        }
-
-        // ── шторка справа ──
-        AnimatedVisibility(
-            visible = drawerOpen,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(DanglerStyle.scrim)
-                    .clickable { drawerOpen = false }
-            )
-        }
-        AnimatedVisibility(
-            visible = drawerOpen,
-            enter = slideInHorizontally { it } + fadeIn(),
-            exit = slideOutHorizontally { it } + fadeOut(),
-            modifier = Modifier.align(Alignment.CenterEnd)
-        ) {
-            SettingsDrawer(
-                vm = vm,
-                onClose = { drawerOpen = false }
-            )
-        }
-    }
-}
-
-/** Дышащая кромка справа — намекает, что меню открывается свайпом влево */
-@Composable
-private fun SwipeEdgeHint(
-    modifier: Modifier = Modifier,
-    blood: Color,
-    onClick: () -> Unit,
-) {
-    val infinite = rememberInfiniteTransition(label = "edge")
-    val glow by infinite.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.9f,
-        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "edge_glow"
-    )
-    Box(
-        modifier = modifier
-            .width(20.dp)
-            .height(120.dp)
-            .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
-            .background(
-                Brush.horizontalGradient(
-                    listOf(Color.Transparent, blood.copy(alpha = 0.35f * glow + 0.15f))
-                )
-            )
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            Icons.Default.KeyboardArrowLeft,
-            contentDescription = "Меню — свайп влево",
-            tint = Color.White.copy(alpha = 0.5f + 0.4f * glow),
-            modifier = Modifier.size(20.dp)
-        )
-    }
-}
-
-/** Шторка настроек: строи, эффекты, темы, точность */
-@Composable
-private fun SettingsDrawer(
-    vm: TunerViewModel,
-    onClose: () -> Unit,
-) {
-    val state by vm.state.collectAsState()
-    val theme = ALL_THEMES[state.themeIndex.coerceIn(ALL_THEMES.indices)]
-
-    var closeAccum by remember { mutableFloatStateOf(0f) }
-
-    Column(
-        Modifier
-            .width(320.dp)
-            .fillMaxHeight()
-            .background(DanglerStyle.panelBg)
-            .border(1.dp, theme.blood.copy(alpha = 0.35f))
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragEnd = {
-                        if (closeAccum > 90f) onClose()
-                        closeAccum = 0f
-                    }
-                ) { _, dragAmount ->
-                    if (dragAmount > 0) closeAccum += dragAmount else closeAccum = 0f
-                }
-            }
-            .padding(18.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // шапка шторки + крестик как в Gloryhole (36dp circle)
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("НАСТРОЙКИ", color = theme.textMain, fontWeight = FontWeight.Black, fontSize = 18.sp, letterSpacing = 2.sp)
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x1FFFFFFF))
-                    .clickable { onClose() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Default.Close, "Закрыть", tint = theme.textDim, modifier = Modifier.size(18.dp))
-            }
-        }
-
-        SettingsSectionLabel("СТРОЙ", theme.textDim)
-        Tunings.ALL.forEach { t ->
-            val selected = t.id == state.tuning.id
+            // струны — тонкая полоска снизу, в порядке строя
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (selected) theme.blood.copy(alpha = 0.16f) else theme.surface
-                    )
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                state.tuning.strings.sortedBy { it.stringNumber }.forEach { s ->
+                    val active = state.activeString?.stringNumber == s.stringNumber
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                when {
+                                    active && state.inTune -> theme.accent.copy(alpha = 0.9f)
+                                    active -> theme.blood.copy(alpha = 0.35f)
+                                    else -> Color.White.copy(alpha = 0.05f)
+                                }
+                            )
+                            .border(
+                                1.dp,
+                                if (active) theme.blood else Color.White.copy(alpha = 0.10f),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            s.name,
+                            color = if (active) Color.White else theme.textDim,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // оверлеи: строй слева вверху, точки справа вверху
+        MonoLabel(
+            text = state.tuning.name.uppercase(),
+            color = theme.blood,
+            fontSize = 11,
+            bold = true,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 24.dp, top = 12.dp)
+        )
+        PageDots(
+            page = pagerState.currentPage,
+            color = theme.textDim,
+            active = theme.blood,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = 24.dp, top = 14.dp)
+        )
+        // бейдж обновы
+        if (update is UpdateUiState.Available) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(end = 24.dp, top = 30.dp)
+                    .clip(CircleShape)
+                    .background(theme.blood)
+                    .clickable {
+                        scope.launch { pagerState.animateScrollToPage(2) }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("ОБНОВА ↓", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PageDots(page: Int, color: Color, active: Color, modifier: Modifier = Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        for (i in 0..2) {
+            Box(
+                Modifier
+                    .size(if (i == page) 7.dp else 5.dp)
+                    .clip(CircleShape)
+                    .background(if (i == page) active else color.copy(alpha = 0.35f))
+            )
+        }
+    }
+}
+
+// ── стр. 0: СТРОЙ ─────────────────────────────────────────
+
+@Composable
+private fun TuningsPage(
+    theme: DanglerTheme,
+    current: Tuning,
+    onSelect: (Tuning) -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text("СТРОЙ", color = theme.textMain, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
+        MonoLabel("свайп вправо → тюнер", color = theme.textDim, fontSize = 10)
+        Tunings.ALL.forEach { t ->
+            val selected = t.id == current.id
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (selected) theme.blood.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.04f))
                     .border(
                         1.dp,
-                        if (selected) theme.blood else theme.textDim.copy(alpha = 0.25f),
-                        RoundedCornerShape(12.dp)
+                        if (selected) theme.blood else Color.White.copy(alpha = 0.10f),
+                        RoundedCornerShape(14.dp)
                     )
-                    .clickable { vm.selectTuning(t) }
-                    .padding(12.dp),
+                    .clickable { onSelect(t) }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
                         t.name,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.Black,
                         color = if (selected) theme.blood else theme.textMain,
-                        fontSize = 15.sp
+                        fontSize = 19.sp
                     )
-                    Text(t.subtitle, color = theme.textDim, fontSize = 11.sp)
+                    Text(t.subtitle, color = theme.textDim, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 6.dp)) {
+                        t.strings.sortedByDescending { it.stringNumber }.forEach { s ->
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(Color.White.copy(alpha = 0.07f))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Text(s.name, color = theme.textDim, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
-                if (selected) Text("●", color = theme.blood, fontSize = 14.sp)
+                if (selected) Text("●", color = theme.blood, fontSize = 16.sp)
             }
         }
+    }
+}
 
-        SettingsSectionLabel("ЭФФЕКТЫ", theme.textDim)
-        DanglerSwitchRow(
-            title = "Стробоскоп",
-            subtitle = "Peterson-полоса над нотой",
-            icon = Icons.Default.Movie,
-            isChecked = state.showStrobe,
-            onCheckedChange = { vm.setShowStrobe(it) },
-            surface = theme.surface,
-            textMain = theme.textMain,
-            textDim = theme.textDim,
-            accent = theme.blood,
-        )
-        DanglerSwitchRow(
-            title = "Гироскоп",
-            subtitle = "Кровь наклоняется + уровень",
-            icon = Icons.Default.ScreenRotation,
-            isChecked = state.gyroEnabled,
-            onCheckedChange = { vm.setGyro(it) },
-            surface = theme.surface,
-            textMain = theme.textMain,
-            textDim = theme.textDim,
-            accent = theme.blood,
-        )
-        DanglerSwitchRow(
-            title = "Вибрация",
-            subtitle = "Отклик при попадании в точку",
-            icon = Icons.Default.Vibration,
-            isChecked = state.hapticsEnabled,
-            onCheckedChange = { vm.setHaptics(it) },
-            surface = theme.surface,
-            textMain = theme.textMain,
-            textDim = theme.textDim,
-            accent = theme.blood,
-        )
+// ── стр. 2: НАСТРОЙКИ + ОБНОВА ────────────────────────────
+
+@Composable
+private fun SettingsPage(
+    vm: TunerViewModel,
+    state: TunerState,
+    theme: DanglerTheme,
+) {
+    val update by vm.update.collectAsState()
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("НАСТРОЙКИ", color = theme.textMain, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
+        MonoLabel("свайп влево → тюнер", color = theme.textDim, fontSize = 10)
 
         SettingsSectionLabel("ТЕМА", theme.textDim)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -504,8 +433,111 @@ private fun SettingsDrawer(
             textDim = theme.textDim,
         )
 
-        Spacer(Modifier.height(4.dp))
-        MonoLabel("свайп вправо — закрыть", color = theme.textDim, fontSize = 10)
-        Spacer(Modifier.height(12.dp))
+        SettingsSectionLabel("ЭФФЕКТЫ", theme.textDim)
+        DanglerSwitchRow(
+            title = "Гироскоп",
+            subtitle = "Кровь наклоняется + уровень",
+            icon = Icons.Default.ScreenRotation,
+            isChecked = state.gyroEnabled,
+            onCheckedChange = { vm.setGyro(it) },
+            surface = Color.White.copy(alpha = 0.05f),
+            textMain = theme.textMain,
+            textDim = theme.textDim,
+            accent = theme.blood,
+        )
+        DanglerSwitchRow(
+            title = "Вибрация",
+            subtitle = "Отклик при попадании в точку",
+            icon = Icons.Default.Vibration,
+            isChecked = state.hapticsEnabled,
+            onCheckedChange = { vm.setHaptics(it) },
+            surface = Color.White.copy(alpha = 0.05f),
+            textMain = theme.textMain,
+            textDim = theme.textDim,
+            accent = theme.blood,
+        )
+
+        SettingsSectionLabel("ОБНОВЛЕНИЕ", theme.textDim)
+        UpdateBlock(vm = vm, theme = theme)
+    }
+}
+
+@Composable
+private fun UpdateBlock(vm: TunerViewModel, theme: DanglerTheme) {
+    val update by vm.update.collectAsState()
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            MonoLabel("ТЕКУЩАЯ: v${vm.currentVersion()}", color = theme.textDim, fontSize = 11)
+            if (update !is UpdateUiState.Checking && update !is UpdateUiState.Downloading) {
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(theme.blood.copy(alpha = 0.2f))
+                        .border(1.dp, theme.blood.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                        .clickable { vm.checkForUpdate(manual = true) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(Icons.Default.Refresh, null, tint = theme.blood, modifier = Modifier.size(16.dp))
+                    Text("ПРОВЕРИТЬ", color = theme.textMain, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+
+        when (val u = update) {
+            is UpdateUiState.Idle -> {}
+            is UpdateUiState.Checking -> MonoLabel("стучусь на гитхаб…", color = theme.textDim, fontSize = 11)
+            is UpdateUiState.UpToDate -> MonoLabel("ты на свежаке ★", color = theme.accent, fontSize = 11, bold = true)
+            is UpdateUiState.Available -> {
+                MonoLabel("ЕСТЬ ${u.info.version.uppercase()} — ${u.info.name}", color = theme.blood, fontSize = 12, bold = true)
+                if (u.info.notes.isNotBlank()) {
+                    Text(
+                        u.info.notes.take(220),
+                        color = theme.textDim,
+                        fontSize = 12.sp,
+                        maxLines = 3,
+                    )
+                }
+                BigRedButton("СКАЧАТЬ И УСТАНОВИТЬ", theme) { vm.downloadUpdate(u.info) }
+            }
+            is UpdateUiState.Downloading -> {
+                MonoLabel("качаю… ${(u.progress * 100).toInt()}%", color = theme.textMain, fontSize = 11, bold = true)
+                LinearProgressIndicator(
+                    progress = { u.progress },
+                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                    color = theme.blood,
+                    trackColor = Color.White.copy(alpha = 0.10f),
+                )
+            }
+            is UpdateUiState.NeedsUnknownSources -> {
+                MonoLabel("разреши установку из неизвестных источников", color = theme.flat, fontSize = 11)
+                BigRedButton("ОТКРЫТЬ НАСТРОЙКИ", theme) { vm.openUnknownSourcesSettings() }
+                MonoLabel("потом жми установку ещё раз", color = theme.textDim, fontSize = 10)
+                BigRedButton("УСТАНОВИТЬ", theme) { vm.fireInstall() }
+            }
+            is UpdateUiState.Installing -> MonoLabel("ставлю… подтверди в системе", color = theme.textDim, fontSize = 11)
+            is UpdateUiState.Error -> MonoLabel(u.message, color = theme.sharp, fontSize = 11)
+        }
+    }
+}
+
+@Composable
+private fun BigRedButton(text: String, theme: DanglerTheme, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(theme.blood)
+            .clickable { onClick() }
+            .padding(vertical = 13.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = 1.sp)
     }
 }
