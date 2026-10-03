@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.text.TextStyle
@@ -35,13 +36,14 @@ import kotlin.math.abs
 import kotlin.math.sin
 
 /**
- * HERO v4 — живая жидкость на штампованной табличке.
+ * HERO v5 — настоящая жидкость.
  *
- * - Глиф дышит и плющится как жидкость: ширина/высота едут на пружине от уровня крови,
- *   лёгкое покачивание (wobble) от фазы волны, в точке — упругий «поп».
- * - Буквы вдавлены в металл (штамп): светлая кромка снизу-справа + тёмная сверху-слева.
- * - Кровь/янтарь/кислота: уровень = |cents| / 50, сторона с гистерезисом ±2.5¢,
- *   появление/исчезновение — плавным фейдом, а не скачком.
+ * - Двухслойная волна: задний слой (прозрачный, сдвиг фазы) + передний +
+ *   светлый блик-мениск по кромке — читается как жидкость, а не полоски.
+ * - Волна медленная и гладкая (шаг 4px, две гармоники синуса, период 3.2с).
+ * - Направление СТРЕЛКАМИ: flat (низко) — ▲ подтяни, sharp (высоко) — ▼ ослабь.
+ *   Стрелки плывут в свою сторону и дышат. В точке их нет — там вспышка.
+ * - Глиф дышит и плющится на пружине, буквы вдавлены штампом.
  * - Заливка строго внутри глифов: saveLayer + маска текста + SrcIn.
  */
 @Composable
@@ -64,19 +66,16 @@ fun BloodNote(
     val measurer = rememberTextMeasurer()
     val infinite = rememberInfiniteTransition(label = "blood")
 
-    // сглаженные центы — граница крови плывёт, а не скачет
     val smoothCents by animateFloatAsState(
         targetValue = cents,
         animationSpec = tween(120),
         label = "cents"
     )
-    // сторона с гистерезисом: у нуля не болтается туда-сюда
     var side by remember { mutableFloatStateOf(-1f) }
     if (abs(cents) > 2.5f) side = if (cents < 0) -1f else 1f
 
     val fillAmt = if (inTune) 1f else (abs(smoothCents) / 50f).coerceIn(0f, 1f)
 
-    // жидкий squash: кровь давит — глиф приплющивается и раздаётся вширь (пружина!)
     val squashX by animateFloatAsState(
         targetValue = 1f + 0.045f * fillAmt,
         animationSpec = spring(dampingRatio = 0.55f, stiffness = 320f),
@@ -87,13 +86,11 @@ fun BloodNote(
         animationSpec = spring(dampingRatio = 0.55f, stiffness = 320f),
         label = "sqy"
     )
-    // упругий поп при попадании в точку
     val pop by animateFloatAsState(
         targetValue = if (inTune && hasSignal) 1.045f else 1f,
         animationSpec = spring(dampingRatio = 0.4f, stiffness = 260f),
         label = "pop"
     )
-    // фейд заливки — без скачков на старт/стопе звука
     val fillAlpha by animateFloatAsState(
         targetValue = if (hasSignal) 1f else 0f,
         animationSpec = tween(250),
@@ -103,7 +100,7 @@ fun BloodNote(
     val wavePhase by infinite.animateFloat(
         initialValue = 0f,
         targetValue = (2 * PI).toFloat(),
-        animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing)),
+        animationSpec = infiniteRepeatable(tween(3200, easing = LinearEasing)),
         label = "wave"
     )
     val breath by infinite.animateFloat(
@@ -113,8 +110,18 @@ fun BloodNote(
         label = "breath"
     )
 
-    // покачивание сосуда — плавно, от непрерывной фазы волны
     val wobble = if (hasSignal) sin(wavePhase) * 1.2f * fillAmt else 0f
+    // цвет жидкости одним взглядом: кислота / кровь / янтарь
+    val liquidTop = when {
+        inTune -> Color(0xFF8DFFB9)
+        inTuning -> blood
+        else -> chroma
+    }
+    val liquidBottom = when {
+        inTune -> Color(0xFF1FBF5F)
+        inTuning -> bloodDark
+        else -> chromaDark
+    }
 
     Canvas(modifier = modifier) {
         val w = size.width
@@ -154,7 +161,7 @@ fun BloodNote(
                     )
                 }
 
-                // штамп в металле: светлая кромка снизу-справа, тёмная сверху-слева, сталь поверх
+                // штамп в металле
                 drawText(
                     textLayoutResult = layout,
                     color = Color.White.copy(alpha = 0.22f),
@@ -192,22 +199,56 @@ fun BloodNote(
                 )
 
                 if (fillAlpha > 0.01f && fillAmt > 0.005f) {
-                    val fillBrush = when {
-                        inTune -> Brush.verticalGradient(
-                            listOf(Color(0xFF8DFFB9), accent, Color(0xFF1FBF5F)),
+                    val fillBrush = if (inTune) {
+                        Brush.verticalGradient(
+                            listOf(liquidTop, accent, liquidBottom),
                             startY = top,
                             endY = bottom,
                         )
-                        inTuning -> Brush.verticalGradient(
-                            listOf(blood, bloodDark),
+                    } else {
+                        Brush.verticalGradient(
+                            listOf(liquidTop, liquidBottom),
                             startY = top,
                             endY = bottom,
                         )
-                        else -> Brush.verticalGradient(
-                            listOf(chroma, chromaDark),
-                            startY = top,
-                            endY = bottom,
-                        )
+                    }
+                    val anchor = if (side < 0) left + fillAmt * tw else right - fillAmt * tw
+                    val waveAmp = (th * 0.035f).coerceIn(4f, 10f)
+                    val waveLen = th / 1.5f
+                    val topExt = top - 80f
+                    val botExt = bottom + 80f
+
+                    // живая поверхность: две гармоники — гладко, без граней
+                    fun surfaceX(y: Float, phase: Float): Float =
+                        anchor +
+                                waveAmp * sin(2 * PI.toFloat() * (y - cy) / waveLen + phase) * 0.7f +
+                                waveAmp * 0.6f * sin(2 * PI.toFloat() * (y - cy) / (waveLen * 0.55f) - phase * 0.7f + 1.3f) * 0.3f
+
+                    fun fillPath(phase: Float, edgeShift: Float): Path {
+                        val path = Path()
+                        val farX = if (side < 0) left - 100f else right + 100f
+                        path.moveTo(farX, topExt)
+                        var y = topExt
+                        while (y <= botExt) {
+                            path.lineTo(surfaceX(y, phase) + edgeShift, y)
+                            y += 4f
+                        }
+                        path.lineTo(farX, botExt)
+                        path.close()
+                        return path
+                    }
+
+                    // кромка-мениск: светлая линия ровно по волне
+                    fun meniscusPath(phase: Float): Path {
+                        val path = Path()
+                        var y = topExt
+                        path.moveTo(surfaceX(y, phase), y)
+                        y += 4f
+                        while (y <= botExt) {
+                            path.lineTo(surfaceX(y, phase), y)
+                            y += 4f
+                        }
+                        return path
                     }
 
                     drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint())
@@ -216,29 +257,62 @@ fun BloodNote(
                     if (fillAmt >= 0.999f) {
                         drawRect(brush = fillBrush, alpha = fillAlpha, blendMode = BlendMode.SrcIn)
                     } else {
-                        val anchor = if (side < 0) left + fillAmt * tw else right - fillAmt * tw
-                        val waveAmp = (th * 0.035f).coerceIn(4f, 10f)
-                        val waveLen = th / 1.5f
-                        val topExt = top - 80f
-                        val botExt = bottom + 80f
-
-                        fun surfaceX(y: Float): Float =
-                            anchor + waveAmp * sin(2 * PI.toFloat() * (y - cy) / waveLen + wavePhase)
-
-                        val path = Path()
-                        val farX = if (side < 0) left - 100f else right + 100f
-                        path.moveTo(farX, topExt)
-                        var y = topExt
-                        while (y <= botExt) {
-                            path.lineTo(surfaceX(y), y)
-                            y += 12f
-                        }
-                        path.lineTo(farX, botExt)
-                        path.close()
-                        drawPath(path = path, brush = fillBrush, alpha = fillAlpha, blendMode = BlendMode.SrcIn)
+                        // задний слой волны — прозрачный, со сдвигом (глубина жидкости)
+                        drawPath(
+                            path = fillPath(wavePhase + PI.toFloat(), if (side < 0) 26f else -26f),
+                            brush = fillBrush,
+                            alpha = fillAlpha * 0.35f,
+                            blendMode = BlendMode.SrcIn,
+                        )
+                        // передний слой
+                        drawPath(
+                            path = fillPath(wavePhase, 0f),
+                            brush = fillBrush,
+                            alpha = fillAlpha,
+                            blendMode = BlendMode.SrcIn,
+                        )
+                        // блик по кромке
+                        drawPath(
+                            path = meniscusPath(wavePhase),
+                            color = Color.White.copy(alpha = 0.5f * fillAlpha),
+                            style = Stroke(width = 4f),
+                            blendMode = BlendMode.SrcIn,
+                        )
                     }
                     drawContext.canvas.restore()
                 }
+            }
+        }
+
+        // ── СТРЕЛКИ: flat — ▲ подтяни, sharp — ▼ ослабь. Плывут и дышат ──
+        if (hasSignal && !inTune) {
+            val up = smoothCents < 0
+            val arrowCol = if (inTuning) blood else chroma
+            val slide = ((wavePhase / (2 * PI).toFloat()) % 1f + 1f) % 1f
+            for (k in 0..1) {
+                val t = (slide + k * 0.5f) % 1f
+                val a = sin(t * PI.toFloat()).coerceIn(0f, 1f)
+                val travel = 46f
+                // якоря в полях над/под глифом: пересчитываем грубо от центра канваса
+                val baseY = if (up) h * 0.10f else h * 0.90f
+                val ay = if (up) baseY + t * travel else baseY - t * travel
+                val s = 26f // полуразмер стрелки
+                val tri = Path().apply {
+                    if (up) {
+                        moveTo(cx - s, ay + s * 0.7f)
+                        lineTo(cx + s, ay + s * 0.7f)
+                        lineTo(cx, ay - s * 0.7f)
+                    } else {
+                        moveTo(cx - s, ay - s * 0.7f)
+                        lineTo(cx + s, ay - s * 0.7f)
+                        lineTo(cx, ay + s * 0.7f)
+                    }
+                    close()
+                }
+                drawPath(
+                    path = tri,
+                    color = arrowCol.copy(alpha = (0.20f + 0.50f * a) * fillAlpha),
+                )
             }
         }
     }
