@@ -19,6 +19,8 @@ data class DanglerTheme(
     val strobe: Color,
     val steel: Color,
     val steelDark: Color,
+    val chroma: Color,      // нота НЕ из строя
+    val chromaDark: Color,
 )
 
 val ThemeBrutal = DanglerTheme(
@@ -35,6 +37,8 @@ val ThemeBrutal = DanglerTheme(
     strobe = Color(0xFFE8E8E8),
     steel = Color(0xFFEDEDEF),
     steelDark = Color(0xFF55555C),
+    chroma = Color(0xFFFFB020),
+    chromaDark = Color(0xFF7A4D00),
 )
 
 val ThemeBlood = DanglerTheme(
@@ -51,6 +55,8 @@ val ThemeBlood = DanglerTheme(
     strobe = Color(0xFFFF2E2E),
     steel = Color(0xFFF5E8E8),
     steelDark = Color(0xFF5C4A4A),
+    chroma = Color(0xFFFFB020),
+    chromaDark = Color(0xFF7A4D00),
 )
 
 val ThemeAcid = DanglerTheme(
@@ -67,6 +73,8 @@ val ThemeAcid = DanglerTheme(
     strobe = Color(0xFFB6FF2E),
     steel = Color(0xFFEFFFE0),
     steelDark = Color(0xFF4E5C43),
+    chroma = Color(0xFFFFB020),
+    chromaDark = Color(0xFF7A4D00),
 )
 
 val ALL_THEMES = listOf(ThemeBrutal, ThemeBlood, ThemeAcid)

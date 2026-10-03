@@ -38,6 +38,7 @@ import kotlin.math.sin
  * Гигантская нота во весь экран (портрет и ландшафт), кровь внутри неё и есть прибор.
  *
  * - Ниже строя — кровь СЛЕВА, выше — СПРАВА, уровень = |cents| / 50.
+ * - Чужая нота (не из строя) льётся ЯНТАРЁМ — сразу видно, что мимо строя.
  * - Центы сглажены (tween 120мс) + мёртвая зона ±2.5¢ на смену стороны — волна не дёргается.
  * - Поверхность ровная + медленная бегущая волна, в точке — кислотная вспышка с дыханием.
  * - Заливка строго внутри глифов: saveLayer + маска текста + SrcIn.
@@ -48,8 +49,11 @@ fun BloodNote(
     cents: Float,
     inTune: Boolean,
     hasSignal: Boolean,
+    inTuning: Boolean,
     blood: Color,
     bloodDark: Color,
+    chroma: Color,
+    chromaDark: Color,
     accent: Color,
     steel: Color,
     steelDark: Color,
@@ -88,8 +92,8 @@ fun BloodNote(
         val cx = w / 2f
         val cy = h / 2f
 
-        // глиф: 62% высоты, ужатие только по ширине
-        val fontSp = (h * 0.60f).toSp()
+        // глиф НА ВЕСЬ ЭКРАН: 66% высоты, ужатие только по ширине
+        val fontSp = (h * 0.66f).toSp()
         val style = TextStyle(
             fontSize = fontSp,
             fontWeight = FontWeight.Black,
@@ -98,7 +102,7 @@ fun BloodNote(
         val layout = measurer.measure(note.ifBlank { "—" }, style)
         val tw = layout.size.width.toFloat()
         val th = layout.size.height.toFloat()
-        val fit = (w * 0.94f / tw).coerceAtMost(1f)
+        val fit = (w * 0.96f / tw).coerceAtMost(1f)
 
         scale(fit, fit, pivot = Offset(cx, cy)) {
             val left = cx - tw / 2f
@@ -153,15 +157,19 @@ fun BloodNote(
 
             val fillFrac = if (inTune) 1f else (abs(smoothCents) / 50f).coerceIn(0f, 1f)
             if (hasSignal && fillFrac > 0.005f) {
-                val fillBrush = if (inTune) {
-                    Brush.verticalGradient(
+                val fillBrush = when {
+                    inTune -> Brush.verticalGradient(
                         listOf(Color(0xFF8DFFB9), accent, Color(0xFF1FBF5F)),
                         startY = top,
                         endY = bottom,
                     )
-                } else {
-                    Brush.verticalGradient(
+                    inTuning -> Brush.verticalGradient(
                         listOf(blood, bloodDark),
+                        startY = top,
+                        endY = bottom,
+                    )
+                    else -> Brush.verticalGradient(
+                        listOf(chroma, chromaDark),
                         startY = top,
                         endY = bottom,
                     )

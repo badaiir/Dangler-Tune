@@ -7,6 +7,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,9 +70,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
- * v2 — ландшафтный металлический минимализм.
+ * v3 — метал-апокалипсис.
  * Навигация только свайпами: [0] СТРОЙ | [1] ТЮНЕР | [2] НАСТРОЙКИ.
- * На тюнере — ничего лишнего: нота на весь экран, кровь внутри неё и есть прибор.
+ * На тюнере — нота на весь экран и точки страниц. Тап — 6 струн. Хроматика: чужая нота льётся янтарём.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -148,151 +149,89 @@ private fun TunerPage(
 ) {
     val scope = rememberCoroutineScope()
     val update by vm.update.collectAsState()
-    // полный минимализм: по тапу показываем струны и цифры, ещё тап — прячем
+    // полный минимализм: по тапу вылазят только 6 струн строя, ещё тап — прячем
     var hudVisible by remember { mutableStateOf(false) }
+    val tapSource = remember { MutableInteractionSource() }
 
     Box(
         Modifier
             .fillMaxSize()
-            .clickable { hudVisible = !hudVisible }
+            .clickable(indication = null, interactionSource = tapSource) { hudVisible = !hudVisible }
     ) {
-        Column(Modifier.fillMaxSize()) {
+        // нота НА ВЕСЬ ЭКРАН — без паддингов, колонок и дублей
+        BloodNote(
+            note = state.noteName.ifBlank { "—" },
+            cents = state.cents,
+            inTune = state.inTune,
+            hasSignal = state.hasSignal,
+            inTuning = state.noteInTuning,
+            blood = theme.blood,
+            bloodDark = theme.bloodDark,
+            chroma = theme.chroma,
+            chromaDark = theme.chromaDark,
+            accent = theme.accent,
+            steel = theme.steel,
+            steelDark = theme.steelDark,
+            dim = theme.textDim,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (!state.permissionGranted) {
+            Button(
+                onClick = onRequestMic,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = theme.accent,
+                    contentColor = Color.Black
+                ),
+                modifier = Modifier.align(Alignment.Center)
+            ) { Text("ДАЙ МИК", fontWeight = FontWeight.Black) }
+        }
+
+        // 6 струн строя — только по тапу. Своя нота — кровь, чужая — янтарь, в точке — кислота
+        if (hudVisible) {
             Row(
                 Modifier
-                    .weight(1f)
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // нота — всё доступное место
-                BloodNote(
-                    note = state.noteName.ifBlank { "—" },
-                    cents = state.cents,
-                    inTune = state.inTune,
-                    hasSignal = state.hasSignal,
-                    blood = theme.blood,
-                    bloodDark = theme.bloodDark,
-                    accent = theme.accent,
-                    steel = theme.steel,
-                    steelDark = theme.steelDark,
-                    dim = theme.textDim,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                )
-                // правая колонка — только в HUD-режиме
-                if (hudVisible) {
-                    Column(
-                        Modifier.width(118.dp),
-                        horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                    if (!state.permissionGranted) {
-                        Button(
-                            onClick = onRequestMic,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = theme.accent,
-                                contentColor = Color.Black
-                            )
-                        ) { Text("МИК", fontWeight = FontWeight.Black) }
-                    } else {
-                        val sideName = state.activeString?.name
-                            ?: state.tuning.strings.maxBy { it.stringNumber }.name
-                        Text(
-                            text = sideName,
-                            color = if (state.activeString != null) theme.textMain else theme.textDim,
-                            fontSize = 30.sp,
-                            fontWeight = FontWeight.Black,
-                        )
-                        MonoLabel(
-                            text = if (state.activeString != null)
-                                "СТРУНА ${state.activeString!!.stringNumber}" else "—",
-                            color = theme.textDim,
-                            fontSize = 10,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            text = when {
-                                !state.hasSignal -> ""
-                                state.inTune -> "OK"
-                                state.cents > 0 -> "+${abs(state.cents).toInt()}"
-                                else -> "−${abs(state.cents).toInt()}"
-                            },
-                            color = when {
-                                !state.hasSignal -> Color.Transparent
-                                state.inTune -> theme.accent
-                                state.cents > 0 -> theme.sharp
-                                else -> theme.flat
-                            },
-                            fontSize = 30.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        )
-                        MonoLabel(
-                            text = if (state.hasSignal)
-                                String.format("%.1f/%.1f", state.frequencyHz, state.targetFreq)
-                            else "ТИШИНА",
-                            color = theme.textDim,
-                            fontSize = 10,
-                        )
-                        }
+                state.tuning.strings.sortedBy { it.stringNumber }.forEach { st ->
+                    val active = state.activeString?.stringNumber == st.stringNumber
+                    val bg = when {
+                        active && state.inTune && state.noteInTuning -> theme.accent.copy(alpha = 0.9f)
+                        active && state.noteInTuning -> theme.blood.copy(alpha = 0.35f)
+                        active -> theme.chroma.copy(alpha = 0.30f)
+                        else -> Color.White.copy(alpha = 0.05f)
                     }
-                }
-            }
-            // струны — только в HUD-режиме
-            if (hudVisible) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp)
-                        .padding(bottom = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                state.tuning.strings.sortedBy { it.stringNumber }.forEach { s ->
-                    val active = state.activeString?.stringNumber == s.stringNumber
+                    val border = when {
+                        active && state.inTune && state.noteInTuning -> theme.accent
+                        active && state.noteInTuning -> theme.blood
+                        active -> theme.chroma
+                        else -> Color.White.copy(alpha = 0.10f)
+                    }
                     Box(
                         Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(
-                                when {
-                                    active && state.inTune -> theme.accent.copy(alpha = 0.9f)
-                                    active -> theme.blood.copy(alpha = 0.35f)
-                                    else -> Color.White.copy(alpha = 0.05f)
-                                }
-                            )
-                            .border(
-                                1.dp,
-                                if (active) theme.blood else Color.White.copy(alpha = 0.10f),
-                                RoundedCornerShape(8.dp)
-                            )
-                            .padding(vertical = 6.dp),
+                            .background(bg)
+                            .border(1.dp, border, RoundedCornerShape(8.dp))
+                            .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            s.name,
+                            st.name,
                             color = if (active) Color.White else theme.textDim,
                             fontWeight = FontWeight.Black,
-                            fontSize = 13.sp
+                            fontSize = 14.sp
                         )
                     }
                 }
             }
-            }
         }
 
-        // оверлеи: строй слева вверху (тоже только в HUD), точки — всегда
-        if (hudVisible) {
-            MonoLabel(
-                text = state.tuning.name.uppercase(),
-                color = theme.blood,
-                fontSize = 11,
-                bold = true,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 24.dp, top = 12.dp)
-            )
-        }
+        // индикатор страниц — всегда (тюнер на средней)
         PageDots(
             page = pagerState.currentPage,
             color = theme.textDim,

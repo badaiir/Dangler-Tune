@@ -34,10 +34,10 @@ data class TunerState(
     val clarity: Float = 0f,
     val noteDisplay: String = Tunings.DEFAULT.strings.maxBy { it.stringNumber }.name,
     val noteName: String = Tunings.DEFAULT.strings.maxBy { it.stringNumber }.name,
-    val cents: Float = 0f,          // -50..+50 относительно ближайшей ноты/струны
-    val centsRelativeString: Float = 0f,
+    val cents: Float = 0f,          // хроматические, -50..+50 относительно ближайшей ноты 12-TET
     val targetFreq: Float = 0f,
-    val activeString: Tuning.StringNote? = null,
+    val activeString: Tuning.StringNote? = null,  // ближайшая струна строя (для подсветки)
+    val noteInTuning: Boolean = true,            // нота входит в текущий строй?
     val tuning: Tuning = Tunings.DEFAULT,
     val hasSignal: Boolean = false,
     val inTune: Boolean = false,    // |cents| <= tolerance
@@ -94,7 +94,7 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
         // в тишине показываем корень строя гигантским — экран не пустует
         val root = t.strings.maxBy { it.stringNumber }.name
         _state.update {
-            it.copy(tuning = t, activeString = null, hasSignal = false, noteDisplay = root, noteName = root)
+            it.copy(tuning = t, activeString = null, hasSignal = false, noteDisplay = root, noteName = root, noteInTuning = true)
         }
     }
 
@@ -139,12 +139,12 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
         val tuning = _state.value.tuning
         val nearestString = NoteUtils.nearestString(med, tuning)
-        val centsStr = if (nearestString != null)
-            NoteUtils.centsRelativeTo(med, nearestString.frequencyHz) else 0f
-        // clamp для дисплея ±50
-        val clamped = centsStr.coerceIn(-50f, 50f)
 
         val note = NoteUtils.freqToNote(med)
+        // хроматика: центы всегда относительно ближайшей ноты 12-TET — осмысленны для любой ноты
+        val clamped = note.cents.coerceIn(-50f, 50f)
+        // своя или нет: имя ноты есть среди струн строя?
+        val inTuning = tuning.strings.any { it.name == note.display }
         val tol = _state.value.toleranceCents
         val inTune = abs(clamped) <= tol && clarity > 0.55f
 
@@ -152,12 +152,12 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 frequencyHz = med,
                 clarity = clarity,
-                noteDisplay = nearestString?.name ?: note.display,
-                noteName = nearestString?.name ?: note.display,
+                noteDisplay = note.display,
+                noteName = note.display,
                 cents = clamped,
-                centsRelativeString = centsStr,
-                targetFreq = nearestString?.frequencyHz ?: note.targetFreq,
+                targetFreq = note.targetFreq,
                 activeString = nearestString,
+                noteInTuning = inTuning,
                 hasSignal = true,
                 inTune = inTune,
             )
