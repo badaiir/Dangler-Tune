@@ -111,6 +111,7 @@ fun TunerScreen(vm: TunerViewModel = viewModel()) {
         MetalBackdrop(
             baseTop = theme.background,
             baseBottom = Color.Black,
+            waveTint = theme.blood,
             modifier = Modifier.fillMaxSize()
         )
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->

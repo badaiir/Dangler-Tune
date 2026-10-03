@@ -3,6 +3,7 @@ package com.dangler.tune.ui.components
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -11,6 +12,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -33,18 +35,18 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.sp
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * HERO v5 — настоящая жидкость.
+ * HERO v6 — вода и радость.
  *
- * - Двухслойная волна: задний слой (прозрачный, сдвиг фазы) + передний +
- *   светлый блик-мениск по кромке — читается как жидкость, а не полоски.
- * - Волна медленная и гладкая (шаг 4px, две гармоники синуса, период 3.2с).
- * - Направление СТРЕЛКАМИ: flat (низко) — ▲ подтяни, sharp (высоко) — ▼ ослабь.
- *   Стрелки плывут в свою сторону и дышат. В точке их нет — там вспышка.
- * - Глиф дышит и плющится на пружине, буквы вдавлены штампом.
- * - Заливка строго внутри глифов: saveLayer + маска текста + SrcIn.
+ * Жидкость без полосок: один слой волны + мягкая пенная кромка (3 гаснущих штриха
+ * вместо жёсткой белой линии) + задний слой УБРАН (он и давал параллельные полосы).
+ * Волна медленная и гладкая: две гармоники синуса, период 4с, шаг 4px.
+ * Направление стрелками: flat — ▲ подтяни, sharp — ▼ ослабь.
+ * В точке — JOJO-ВЗРЫВ РАДОСТИ: speed lines + расходящееся кольцо + ゴゴゴ + вспышка.
+ * Глиф дышит и плющится на пружине, буквы вдавлены штампом.
  */
 @Composable
 fun BloodNote(
@@ -100,7 +102,7 @@ fun BloodNote(
     val wavePhase by infinite.animateFloat(
         initialValue = 0f,
         targetValue = (2 * PI).toFloat(),
-        animationSpec = infiniteRepeatable(tween(3200, easing = LinearEasing)),
+        animationSpec = infiniteRepeatable(tween(4000, easing = LinearEasing)),
         label = "wave"
     )
     val breath by infinite.animateFloat(
@@ -110,8 +112,19 @@ fun BloodNote(
         label = "breath"
     )
 
-    val wobble = if (hasSignal) sin(wavePhase) * 1.2f * fillAmt else 0f
-    // цвет жидкости одним взглядом: кислота / кровь / янтарь
+    // взрыв радости: срабатывает один раз на вход в точку
+    var burst by remember { mutableFloatStateOf(1f) } // 0→1 прогресс, 1 = покой
+    LaunchedEffect(inTune, hasSignal) {
+        if (inTune && hasSignal) {
+            animate(0f, 1f, animationSpec = tween(700, easing = FastOutSlowInEasing)) { v, _ ->
+                burst = v
+            }
+        } else {
+            burst = 1f
+        }
+    }
+
+    val wobble = if (hasSignal) sin(wavePhase) * 0.8f * fillAmt else 0f
     val liquidTop = when {
         inTune -> Color(0xFF8DFFB9)
         inTuning -> blood
@@ -121,6 +134,11 @@ fun BloodNote(
         inTune -> Color(0xFF1FBF5F)
         inTuning -> bloodDark
         else -> chromaDark
+    }
+    val foam = when {
+        inTune -> Color(0xFFC9FFE0)
+        inTuning -> Color(0xFFFF8080)
+        else -> Color(0xFFFFD98A)
     }
 
     Canvas(modifier = modifier) {
@@ -140,14 +158,65 @@ fun BloodNote(
         val tw = layout.size.width.toFloat()
         val th = layout.size.height.toFloat()
         val fit = (w * 0.96f / tw).coerceAtMost(1f)
+        val left = cx - tw * fit / 2f
+        val right = cx + tw * fit / 2f
+        val top = cy - th * fit / 2f
+        val bottom = cy + th * fit / 2f
+
+        // ── JOJO-ВЗРЫВ (поверх всего, не клиппится глифами) ──
+        if (burst < 1f) {
+            val p = burst
+            val fade = 1f - p
+            // вспышка
+            drawRect(color = Color.White.copy(alpha = 0.14f * fade))
+            // расходящееся кольцо
+            drawCircle(
+                color = accent.copy(alpha = 0.55f * fade),
+                radius = tw * 0.35f + tw * 0.55f * p,
+                center = Offset(cx, cy),
+                style = Stroke(width = 10f * fade + 2f),
+            )
+            // speed lines
+            val rays = 26
+            for (i in 0 until rays) {
+                val ang = 2 * PI.toFloat() * i / rays + p * 0.35f
+                val r0 = tw * (0.42f + 0.10f * p)
+                val r1 = r0 + 60f + 200f * p
+                drawLine(
+                    color = Color.White.copy(alpha = 0.50f * fade),
+                    start = Offset(cx + cos(ang) * r0, cy + sin(ang) * r0),
+                    end = Offset(cx + cos(ang) * r1, cy + sin(ang) * r1),
+                    strokeWidth = 7f * fade + 1f,
+                )
+            }
+            // ゴゴゴ — menacing symbols вокруг
+            val goStyle = TextStyle(
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Black,
+                color = steel.copy(alpha = 0.55f * fade),
+            )
+            val spots = listOf(
+                Offset(left - 60f, top - 40f),
+                Offset(right + 10f, top + th * fit * 0.2f),
+                Offset(left - 40f, bottom - 60f),
+                Offset(right - 40f, bottom + 10f),
+                Offset(cx - 40f, top - 90f),
+            )
+            val gos = listOf("ゴ", "ゴ", "ゴ", "ド", "ン")
+            spots.forEachIndexed { idx, off ->
+                val gl = measurer.measure(gos[idx], goStyle)
+                drawText(gl, color = steel.copy(alpha = 0.55f * fade), topLeft = off)
+            }
+        }
 
         rotate(wobble, pivot = Offset(cx, cy)) {
             scale(fit * squashX * pop, fit * squashY * pop, pivot = Offset(cx, cy)) {
-                val left = cx - tw / 2f
-                val right = cx + tw / 2f
-                val top = cy - th / 2f
-                val bottom = cy + th / 2f
-                val origin = Offset(left, top)
+                // координаты ВНУТРИ трансформа (глифные, до fit)
+                val gLeft = cx - tw / 2f
+                val gRight = cx + tw / 2f
+                val gTop = cy - th / 2f
+                val gBottom = cy + th / 2f
+                val origin = Offset(gLeft, gTop)
 
                 if (inTune && hasSignal) {
                     drawCircle(
@@ -177,8 +246,8 @@ fun BloodNote(
                         textLayoutResult = layout,
                         brush = Brush.verticalGradient(
                             listOf(steel, steelDark),
-                            startY = top,
-                            endY = bottom,
+                            startY = gTop,
+                            endY = gBottom,
                         ),
                         topLeft = origin,
                     )
@@ -193,8 +262,8 @@ fun BloodNote(
                 // центральный датчик — едва видимая риска
                 drawLine(
                     color = Color.White.copy(alpha = 0.13f),
-                    start = Offset(cx, top - 12f),
-                    end = Offset(cx, bottom + 12f),
+                    start = Offset(cx, gTop - 12f),
+                    end = Offset(cx, gBottom + 12f),
                     strokeWidth = 2f,
                 )
 
@@ -202,44 +271,28 @@ fun BloodNote(
                     val fillBrush = if (inTune) {
                         Brush.verticalGradient(
                             listOf(liquidTop, accent, liquidBottom),
-                            startY = top,
-                            endY = bottom,
+                            startY = gTop,
+                            endY = gBottom,
                         )
                     } else {
                         Brush.verticalGradient(
                             listOf(liquidTop, liquidBottom),
-                            startY = top,
-                            endY = bottom,
+                            startY = gTop,
+                            endY = gBottom,
                         )
                     }
-                    val anchor = if (side < 0) left + fillAmt * tw else right - fillAmt * tw
+                    val anchor = if (side < 0) gLeft + fillAmt * tw else gRight - fillAmt * tw
                     val waveAmp = (th * 0.035f).coerceIn(4f, 10f)
                     val waveLen = th / 1.5f
-                    val topExt = top - 80f
-                    val botExt = bottom + 80f
+                    val topExt = gTop - 80f
+                    val botExt = gBottom + 80f
 
-                    // живая поверхность: две гармоники — гладко, без граней
                     fun surfaceX(y: Float, phase: Float): Float =
                         anchor +
                                 waveAmp * sin(2 * PI.toFloat() * (y - cy) / waveLen + phase) * 0.7f +
                                 waveAmp * 0.6f * sin(2 * PI.toFloat() * (y - cy) / (waveLen * 0.55f) - phase * 0.7f + 1.3f) * 0.3f
 
-                    fun fillPath(phase: Float, edgeShift: Float): Path {
-                        val path = Path()
-                        val farX = if (side < 0) left - 100f else right + 100f
-                        path.moveTo(farX, topExt)
-                        var y = topExt
-                        while (y <= botExt) {
-                            path.lineTo(surfaceX(y, phase) + edgeShift, y)
-                            y += 4f
-                        }
-                        path.lineTo(farX, botExt)
-                        path.close()
-                        return path
-                    }
-
-                    // кромка-мениск: светлая линия ровно по волне
-                    fun meniscusPath(phase: Float): Path {
+                    fun surfacePath(phase: Float): Path {
                         val path = Path()
                         var y = topExt
                         path.moveTo(surfaceX(y, phase), y)
@@ -257,34 +310,31 @@ fun BloodNote(
                     if (fillAmt >= 0.999f) {
                         drawRect(brush = fillBrush, alpha = fillAlpha, blendMode = BlendMode.SrcIn)
                     } else {
-                        // задний слой волны — прозрачный, со сдвигом (глубина жидкости)
-                        drawPath(
-                            path = fillPath(wavePhase + PI.toFloat(), if (side < 0) 26f else -26f),
-                            brush = fillBrush,
-                            alpha = fillAlpha * 0.35f,
-                            blendMode = BlendMode.SrcIn,
-                        )
-                        // передний слой
-                        drawPath(
-                            path = fillPath(wavePhase, 0f),
-                            brush = fillBrush,
-                            alpha = fillAlpha,
-                            blendMode = BlendMode.SrcIn,
-                        )
-                        // блик по кромке
-                        drawPath(
-                            path = meniscusPath(wavePhase),
-                            color = Color.White.copy(alpha = 0.5f * fillAlpha),
-                            style = Stroke(width = 4f),
-                            blendMode = BlendMode.SrcIn,
-                        )
+                        // тело воды
+                        val body = Path().apply {
+                            val farX = if (side < 0) gLeft - 100f else gRight + 100f
+                            moveTo(farX, topExt)
+                            var y = topExt
+                            while (y <= botExt) {
+                                lineTo(surfaceX(y, wavePhase), y)
+                                y += 4f
+                            }
+                            lineTo(farX, botExt)
+                            close()
+                        }
+                        drawPath(path = body, brush = fillBrush, alpha = fillAlpha, blendMode = BlendMode.SrcIn)
+                        // пенная кромка: 3 гаснущих штриха — мягко, без белой полосы
+                        val surf = surfacePath(wavePhase)
+                        drawPath(surf, color = foam.copy(alpha = 0.14f * fillAlpha), style = Stroke(13f), blendMode = BlendMode.SrcIn)
+                        drawPath(surf, color = foam.copy(alpha = 0.24f * fillAlpha), style = Stroke(7f), blendMode = BlendMode.SrcIn)
+                        drawPath(surf, color = foam.copy(alpha = 0.38f * fillAlpha), style = Stroke(3.5f), blendMode = BlendMode.SrcIn)
                     }
                     drawContext.canvas.restore()
                 }
             }
         }
 
-        // ── СТРЕЛКИ: flat — ▲ подтяни, sharp — ▼ ослабь. Плывут и дышат ──
+        // ── СТРЕЛКИ: flat — ▲ подтяни, sharp — ▼ ослабь ──
         if (hasSignal && !inTune) {
             val up = smoothCents < 0
             val arrowCol = if (inTuning) blood else chroma
@@ -293,10 +343,9 @@ fun BloodNote(
                 val t = (slide + k * 0.5f) % 1f
                 val a = sin(t * PI.toFloat()).coerceIn(0f, 1f)
                 val travel = 46f
-                // якоря в полях над/под глифом: пересчитываем грубо от центра канваса
                 val baseY = if (up) h * 0.10f else h * 0.90f
                 val ay = if (up) baseY + t * travel else baseY - t * travel
-                val s = 26f // полуразмер стрелки
+                val s = 26f
                 val tri = Path().apply {
                     if (up) {
                         moveTo(cx - s, ay + s * 0.7f)
