@@ -36,6 +36,13 @@ class PitchPipeline(
     private val window = FloatArray(windowSize)
     private val medians = ArrayDeque<Float>()
     private var locked = 0f
+    /**
+     * Пол sustain: ниже этого уровня нота уже догорает в шуме — оценку не гоним,
+     * держим последнее уверенное значение (иначе игла ползёт по шумовому хвосту).
+     */
+    private val holdFloor = 0.025f
+    /** Если тихая рамка дальше этого от lock — это уже новая нота, перехватываем. */
+    private val holdWidthCents = 15f
 
     /** Скормить чанк [-1, 1] с микрофона. Возвращает свежее чтение или null. */
     fun push(chunk: FloatArray): Reading? {
@@ -86,6 +93,15 @@ class PitchPipeline(
         if (res.clarity < clarityGate) {
             medians.clear()
             return null
+        }
+
+        // тихий хвост: та же нота догорает — стоим, новая — перехватываем
+        if (rms < holdFloor && locked > 0f) {
+            val drift = 1200 * kotlin.math.log2(res.frequencyHz / locked)
+            if (kotlin.math.abs(drift) < holdWidthCents) {
+                return Reading(locked, res.clarity)
+            }
+            medians.clear() // чужая тихая нота — забываем старое, захватываем заново
         }
 
         // медиана-5
