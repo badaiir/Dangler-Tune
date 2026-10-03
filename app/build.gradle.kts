@@ -12,8 +12,8 @@ android {
         applicationId = "com.dangler.tune"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 8
+        versionName = "1.7"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -70,4 +70,5 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
+    testImplementation("junit:junit:4.13.2")
 }

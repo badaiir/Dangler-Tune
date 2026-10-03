@@ -13,7 +13,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dangler.tune.audio.AudioRecorder
 import com.dangler.tune.dsp.NoteUtils
-import com.dangler.tune.dsp.YinPitchDetector
+import com.dangler.tune.dsp.PitchPipeline
 import com.dangler.tune.model.Tuning
 import com.dangler.tune.model.Tunings
 import com.dangler.tune.update.UpdateManager
@@ -70,12 +70,8 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     val update: StateFlow<UpdateUiState> = _update.asStateFlow()
 
     private val recorder = AudioRecorder()
-    private val yin = YinPitchDetector()
+    private val pipeline = PitchPipeline()
     private var noSignalJob: Job? = null
-
-    // медианный фильтр по частоте — убирает джиттер/перескоки на октаву
-    private val freqWindow = ArrayDeque<Float>()
-    private val strobeOffset = MutableStateFlow(0f)
 
     fun onPermissionResult(granted: Boolean) {
         _state.update { it.copy(permissionGranted = granted) }
@@ -90,7 +86,7 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectTuning(t: Tuning) {
-        freqWindow.clear()
+        pipeline.reset()
         // в тишине показываем корень строя гигантским — экран не пустует
         val root = t.strings.maxBy { it.stringNumber }.name
         _state.update {
@@ -105,11 +101,11 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     fun start() {
         if (_state.value.isListening) return
         _state.update { it.copy(isListening = true) }
+        pipeline.reset()
         recorder.start(viewModelScope) { frame ->
-            // фрейм уже 4096; если меньше — пропускаем
-            if (frame.size < 4096) return@start
-            val res = yin.detect(frame) ?: run { markNoSignalSoon(); return@start }
-            onPitch(res.frequencyHz, res.clarity)
+            val reading = pipeline.push(frame)
+            if (reading != null) onPitch(reading.frequencyHz, reading.clarity)
+            else markNoSignalSoon()
         }
     }
 
@@ -124,23 +120,17 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
         noSignalJob = viewModelScope.launch {
             delay(120)
             _state.update { it.copy(hasSignal = false, inTune = false) }
-            freqWindow.clear()
         }
     }
 
     private fun onPitch(freq: Float, clarity: Float) {
         noSignalJob?.cancel()
 
-        // медиана по 3 кадрам: быстро, но без выбросов
-        freqWindow.addLast(freq)
-        if (freqWindow.size > 3) freqWindow.removeFirst()
-        val sorted = freqWindow.sorted()
-        val med = sorted[sorted.size / 2]
-
+        // сглаживание уже внутри PitchPipeline (медиана + атака/релиз) — здесь сразу нота
         val tuning = _state.value.tuning
-        val nearestString = NoteUtils.nearestString(med, tuning)
+        val nearestString = NoteUtils.nearestString(freq, tuning)
 
-        val note = NoteUtils.freqToNote(med)
+        val note = NoteUtils.freqToNote(freq)
         // хроматика: центы всегда относительно ближайшей ноты 12-TET — осмысленны для любой ноты
         val clamped = note.cents.coerceIn(-50f, 50f)
         // своя или нет: имя ноты есть среди струн строя?
@@ -150,7 +140,7 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
         _state.update {
             it.copy(
-                frequencyHz = med,
+                frequencyHz = freq,
                 clarity = clarity,
                 noteDisplay = note.display,
                 noteName = note.display,

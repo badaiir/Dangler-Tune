@@ -24,6 +24,11 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Unit tests (DSP pitch pipeline)
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --stacktrace
+
       - name: Build debug APK
         run: |
           chmod +x gradlew

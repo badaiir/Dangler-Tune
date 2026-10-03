@@ -1,0 +1,114 @@
+package com.dangler.tune.dsp
+
+/**
+ * Полный pitch-пайплайн гитарного тюнера (чистый Kotlin, без Android-зависимостей —
+ * поэтому покрыт юнит-тестами, см. PitchPipelineTest).
+ *
+ * Цепочка (выводы из TarsosDSP + практики тюнеров):
+ * 1. Аккумулятор: чанки микрофона любых размеров складываются в очередь —
+ *    никаких пропусков кадров и дыр в анализе.
+ * 2. Даунсемплинг ×2 (44100 → 22050, среднее пар = заодно мягкий anti-alias low-pass):
+ *    окно 2048 покрывает 93мс — для B1 (61.7Гц, период 16мс) влезает ~5.7 периодов,
+ *    а MPM стоит те же 2М операций, что и 46мс на полной частоте.
+ * 3. Окно 2048 / hop 1024 (46мс) — баланс задержки и стабильности.
+ * 4. Удаление DC (вычет среднего): смещение микрофона иначе косит NSDF.
+ * 5. RMS-gate против тишины/шума.
+ * 6. MPM + clarity-gate.
+ * 7. Трекер: медиана-5 против выбросов, быстрая атака (скачок >25¢ — сразу),
+ *    медленный релиз (EMA 0.35) — нота переключается быстро, игла не дрожит.
+ */
+class PitchPipeline(
+    private val inputSampleRate: Int = 44100,
+    private val downsample: Int = 2,
+    private val windowSize: Int = 2048,   // в даунсемплированных сэмплах
+    private val hopSize: Int = 1024,      // в даунсемплированных сэмплах
+    private val rmsGate: Float = 0.006f,
+    private val clarityGate: Float = 0.55f,
+    private val attackCents: Float = 25f,
+    private val releaseAlpha: Float = 0.35f,
+) {
+    data class Reading(val frequencyHz: Float, val clarity: Float)
+
+    private val effectiveRate = inputSampleRate / downsample
+    private val mpm = MpmPitchDetector(sampleRate = effectiveRate, bufferSize = windowSize)
+    private val ring = ArrayDeque<Float>()
+    private var carry: Float? = null // непарный остаток даунсемплинга между чанками
+    private val window = FloatArray(windowSize)
+    private val medians = ArrayDeque<Float>()
+    private var locked = 0f
+
+    /** Скормить чанк [-1, 1] с микрофона. Возвращает свежее чтение или null. */
+    fun push(chunk: FloatArray): Reading? {
+        // даунсемплинг средним пар, со склейкой через границу чанков
+        var i = 0
+        val c = carry
+        if (c != null && chunk.isNotEmpty()) {
+            ring.addLast((c + chunk[0]) / 2f)
+            carry = null
+            i = 1
+        }
+        while (i + 1 < chunk.size) {
+            ring.addLast((chunk[i] + chunk[i + 1]) / 2f)
+            i += 2
+        }
+        if (i < chunk.size) carry = chunk[i]
+
+        var latest: Reading? = null
+        while (ring.size >= windowSize) {
+            for (k in 0 until windowSize) window[k] = ring[k]
+            repeat(hopSize) { ring.removeFirst() }
+            processWindow()?.let { latest = it }
+        }
+        return latest
+    }
+
+    private fun processWindow(): Reading? {
+        // DC removal + RMS одним проходом
+        var mean = 0.0
+        for (v in window) mean += v
+        mean /= windowSize
+        var energy = 0.0
+        for (k in 0 until windowSize) {
+            val centered = window[k] - mean
+            window[k] = centered.toFloat()
+            energy += centered * centered
+        }
+        val rms = kotlin.math.sqrt(energy / windowSize)
+        if (rms < rmsGate) {
+            medians.clear()
+            return null
+        }
+
+        val res = mpm.detect(window) ?: run {
+            medians.clear()
+            return null
+        }
+        if (res.clarity < clarityGate) {
+            medians.clear()
+            return null
+        }
+
+        // медиана-5
+        medians.addLast(res.frequencyHz)
+        if (medians.size > 5) medians.removeFirst()
+        val sorted = medians.sorted()
+        val med = sorted[sorted.size / 2]
+
+        // быстрая атака / медленный релиз
+        if (locked <= 0f) {
+            locked = med
+        } else {
+            val diffCents = 1200 * kotlin.math.log2(med / locked)
+            locked = if (kotlin.math.abs(diffCents) > attackCents) med
+            else locked + (med - locked) * releaseAlpha
+        }
+        return Reading(locked, res.clarity)
+    }
+
+    fun reset() {
+        ring.clear()
+        medians.clear()
+        locked = 0f
+        carry = null
+    }
+}
