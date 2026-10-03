@@ -16,7 +16,6 @@ import com.dangler.tune.dsp.NoteUtils
 import com.dangler.tune.dsp.YinPitchDetector
 import com.dangler.tune.model.Tuning
 import com.dangler.tune.model.Tunings
-import com.dangler.tune.sensor.TiltSensor
 import com.dangler.tune.update.UpdateManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,7 +45,6 @@ data class TunerState(
     val isListening: Boolean = false,
     val permissionGranted: Boolean = false,
     val themeIndex: Int = 0,
-    val gyroEnabled: Boolean = true,
     val hapticsEnabled: Boolean = true,
 )
 
@@ -67,9 +65,6 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(TunerState())
     val state: StateFlow<TunerState> = _state.asStateFlow()
-
-    private val tiltSensor = TiltSensor(application)
-    val tilt: StateFlow<TiltSensor.Tilt> = tiltSensor.tilt
 
     private val _update = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val update: StateFlow<UpdateUiState> = _update.asStateFlow()
@@ -106,15 +101,10 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     fun selectTheme(i: Int) { _state.update { it.copy(themeIndex = i) } }
     fun setTolerance(c: Float) { _state.update { it.copy(toleranceCents = c) } }
     fun setHaptics(v: Boolean) { _state.update { it.copy(hapticsEnabled = v) } }
-    fun setGyro(v: Boolean) {
-        _state.update { it.copy(gyroEnabled = v) }
-        if (v && _state.value.isListening) tiltSensor.start() else tiltSensor.stop()
-    }
 
     fun start() {
         if (_state.value.isListening) return
         _state.update { it.copy(isListening = true) }
-        if (_state.value.gyroEnabled) tiltSensor.start()
         recorder.start(viewModelScope) { frame ->
             // фрейм уже 4096; если меньше — пропускаем
             if (frame.size < 4096) return@start
@@ -125,15 +115,14 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stop() {
         recorder.stop()
-        tiltSensor.stop()
         _state.update { it.copy(isListening = false, hasSignal = false) }
     }
 
     private fun markNoSignalSoon() {
-        // дебаунс: не моргаем при одном пустом кадре
+        // дебаунс короткий — буквы меняются быстро
         if (noSignalJob?.isActive == true) return
         noSignalJob = viewModelScope.launch {
-            delay(180)
+            delay(120)
             _state.update { it.copy(hasSignal = false, inTune = false) }
             freqWindow.clear()
         }
@@ -142,9 +131,9 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     private fun onPitch(freq: Float, clarity: Float) {
         noSignalJob?.cancel()
 
-        // медиана по 5 кадрам против выбросов
+        // медиана по 3 кадрам: быстро, но без выбросов
         freqWindow.addLast(freq)
-        if (freqWindow.size > 5) freqWindow.removeFirst()
+        if (freqWindow.size > 3) freqWindow.removeFirst()
         val sorted = freqWindow.sorted()
         val med = sorted[sorted.size / 2]
 
@@ -264,7 +253,6 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         recorder.stop()
-        tiltSensor.stop()
         super.onCleared()
     }
 }

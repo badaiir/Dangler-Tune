@@ -29,7 +29,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -78,7 +77,6 @@ import kotlin.math.abs
 @Composable
 fun TunerScreen(vm: TunerViewModel = viewModel()) {
     val state by vm.state.collectAsState()
-    val tilt by vm.tilt.collectAsState()
     val theme = ALL_THEMES[state.themeIndex.coerceIn(ALL_THEMES.indices)]
     val ctx = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -129,8 +127,6 @@ fun TunerScreen(vm: TunerViewModel = viewModel()) {
                     state = state,
                     theme = theme,
                     pagerState = pagerState,
-                    tiltRoll = if (state.gyroEnabled) tilt.rollDeg else 0f,
-                    tiltPitch = if (state.gyroEnabled) tilt.pitchDeg else 0f,
                     onRequestMic = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                 )
                 2 -> SettingsPage(vm = vm, state = state, theme = theme)
@@ -148,14 +144,18 @@ private fun TunerPage(
     state: TunerState,
     theme: DanglerTheme,
     pagerState: PagerState,
-    tiltRoll: Float,
-    tiltPitch: Float,
     onRequestMic: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val update by vm.update.collectAsState()
+    // полный минимализм: по тапу показываем струны и цифры, ещё тап — прячем
+    var hudVisible by remember { mutableStateOf(false) }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .clickable { hudVisible = !hudVisible }
+    ) {
         Column(Modifier.fillMaxSize()) {
             Row(
                 Modifier
@@ -164,14 +164,12 @@ private fun TunerPage(
                     .padding(horizontal = 24.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // нота — 70% ширины, вся высота
+                // нота — всё доступное место
                 BloodNote(
                     note = state.noteName.ifBlank { "—" },
                     cents = state.cents,
                     inTune = state.inTune,
                     hasSignal = state.hasSignal,
-                    tiltRollDeg = tiltRoll,
-                    tiltPitchDeg = tiltPitch,
                     blood = theme.blood,
                     bloodDark = theme.bloodDark,
                     accent = theme.accent,
@@ -182,12 +180,13 @@ private fun TunerPage(
                         .weight(1f)
                         .fillMaxHeight()
                 )
-                // правая колонка: струна + центы, и больше ничего
-                Column(
-                    Modifier.width(118.dp),
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.Center,
-                ) {
+                // правая колонка — только в HUD-режиме
+                if (hudVisible) {
+                    Column(
+                        Modifier.width(118.dp),
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
                     if (!state.permissionGranted) {
                         Button(
                             onClick = onRequestMic,
@@ -236,17 +235,19 @@ private fun TunerPage(
                             color = theme.textDim,
                             fontSize = 10,
                         )
+                        }
                     }
                 }
             }
-            // струны — тонкая полоска снизу, в порядке строя
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp)
-                    .padding(bottom = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+            // струны — только в HUD-режиме
+            if (hudVisible) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp)
+                        .padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                 state.tuning.strings.sortedBy { it.stringNumber }.forEach { s ->
                     val active = state.activeString?.stringNumber == s.stringNumber
                     Box(
@@ -277,18 +278,21 @@ private fun TunerPage(
                     }
                 }
             }
+            }
         }
 
-        // оверлеи: строй слева вверху, точки справа вверху
-        MonoLabel(
-            text = state.tuning.name.uppercase(),
-            color = theme.blood,
-            fontSize = 11,
-            bold = true,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 24.dp, top = 12.dp)
-        )
+        // оверлеи: строй слева вверху (тоже только в HUD), точки — всегда
+        if (hudVisible) {
+            MonoLabel(
+                text = state.tuning.name.uppercase(),
+                color = theme.blood,
+                fontSize = 11,
+                bold = true,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 24.dp, top = 12.dp)
+            )
+        }
         PageDots(
             page = pagerState.currentPage,
             color = theme.textDim,
@@ -436,17 +440,6 @@ private fun SettingsPage(
         )
 
         SettingsSectionLabel("ЭФФЕКТЫ", theme.textDim)
-        DanglerSwitchRow(
-            title = "Гироскоп",
-            subtitle = "Кровь наклоняется + уровень",
-            icon = Icons.Default.ScreenRotation,
-            isChecked = state.gyroEnabled,
-            onCheckedChange = { vm.setGyro(it) },
-            surface = Color.White.copy(alpha = 0.05f),
-            textMain = theme.textMain,
-            textDim = theme.textDim,
-            accent = theme.blood,
-        )
         DanglerSwitchRow(
             title = "Вибрация",
             subtitle = "Отклик при попадании в точку",
