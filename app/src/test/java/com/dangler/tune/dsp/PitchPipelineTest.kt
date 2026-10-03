@@ -96,9 +96,47 @@ class PitchPipelineTest {
         }
     }
 
+    /** Пытка мелкими колонками: фундамент почти отсутствует, доминируют 2-3 гармоники. */
+    private fun weakFund(freq: Float, sr: Int, secs: Double, fundAtten: Float): FloatArray {
+        val n = (sr * secs).toInt()
+        val out = FloatArray(n)
+        val rnd = Random(11)
+        val amps = floatArrayOf(fundAtten, 0.55f, 1.0f, 0.6f, 0.35f)
+        for (i in 0 until n) {
+            var s = 0f
+            for (h in amps.indices) {
+                s += amps[h] * sin(2 * PI * freq * (h + 1) * i / sr).toFloat()
+            }
+            out[i] = s / amps.sum() * 0.6f + (rnd.nextFloat() * 2 - 1) * 0.006f
+        }
+        return out
+    }
+
     @Test
-    fun detunedString_tracksCents() {
-        // A2 на -18 центов — пайплайн должен увидеть ~-18, а не соседнюю ноту
+    fun weakFundamental_neverReportsFifthGhost() {
+        // правда 110Гц. Разрешены правда/октава/тишина, но НЕ квинтовый призрак 165Гц.
+        for (att in floatArrayOf(0.3f, 0.1f, 0.03f)) {
+            val sig = weakFund(110f, 44100, 1.0, att)
+            val pipe = PitchPipeline()
+            val got = mutableListOf<Float>()
+            var j = 0
+            while (j < sig.size) {
+                pipe.push(sig.copyOfRange(j, minOf(j + 4096, sig.size)))?.let { got.add(it.frequencyHz) }
+                j += 4096
+            }
+            assertTrue("fund=$att: no readings", got.isNotEmpty())
+            for (f in got) {
+                val ratio = f / 110f
+                val legit = kotlin.math.abs(ratio - 1f) < 0.04f ||
+                        kotlin.math.abs(ratio - 2f) < 0.04f ||
+                        kotlin.math.abs(ratio - 0.5f) < 0.04f
+                assertTrue("fund=$att: ghost $f Hz", legit)
+            }
+        }
+    }
+
+    @Test
+    fun detunedString_tracksCents() {        // A2 на -18 центов — пайплайн должен увидеть ~-18, а не соседнюю ноту
         val f = (110f * Math.pow(2.0, -18.0 / 1200)).toFloat()
         val s = measure(f, pluck(f, 44100, 1.5))
         assertTrue("frames=${s.frames}", s.frames > 5)

@@ -44,6 +44,11 @@ class PitchPipeline(
     /** Если тихая рамка дальше этого от lock — это уже новая нота, перехватываем. */
     private val holdWidthCents = 15f
 
+    companion object {
+        /** Однополюсный LPF ~1000Гц @22050: a = 1 - exp(-2π·1000/22050). */
+        const val LOWPASS_A = 0.248f
+    }
+
     /** Скормить чанк [-1, 1] с микрофона. Возвращает свежее чтение или null. */
     fun push(chunk: FloatArray): Reading? {
         // даунсемплинг средним пар, со склейкой через границу чанков
@@ -80,11 +85,22 @@ class PitchPipeline(
             window[k] = centered.toFloat()
             energy += centered * centered
         }
+        // однополюсный low-pass ~1000Гц: душит верхние гармоники/хэш, фундамент цел.
+        // MPM от этого только стабильнее (периодичность фильтр не трогает).
+        // Гейты — по СЫРОМУ уровню (до фильтра), детект — по фильтрованному.
         val rms = kotlin.math.sqrt(energy / windowSize)
         if (rms < rmsGate) {
             medians.clear()
             return null
         }
+        var y = window[0]
+        for (k in window.indices) {
+            y += LOWPASS_A * (window[k] - y)
+            window[k] = y
+        }
+        var energyF = 0.0
+        for (k in 0 until windowSize) energyF += window[k] * window[k]
+        val rmsF = kotlin.math.sqrt(energyF / windowSize)
 
         val res = mpm.detect(window) ?: run {
             medians.clear()
@@ -96,7 +112,8 @@ class PitchPipeline(
         }
 
         // тихий хвост: та же нота догорает — стоим, новая — перехватываем
-        if (rms < holdFloor && locked > 0f) {
+        // (уровень хвоста меряем по фильтрованному окну — честная энергия фундамента)
+        if (rmsF < holdFloor && locked > 0f) {
             val drift = 1200 * kotlin.math.log2(res.frequencyHz / locked)
             if (kotlin.math.abs(drift) < holdWidthCents) {
                 return Reading(locked, res.clarity)

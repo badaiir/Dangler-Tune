@@ -17,8 +17,13 @@ import kotlin.math.max
 class MpmPitchDetector(
     private val sampleRate: Int = 22050,
     private val bufferSize: Int = 2048,
-    /** Доля от сильнейшего пика: первый пик выше cutoff*max и есть период (Tartini: 0.93). */
-    private val cutoff: Double = 0.95,
+    /**
+     * Доля от сильнейшего пика: первый пик выше cutoff*max и есть период.
+     * TarsosDSP дефолт 0.97 (строже Tartini 0.93) — жёстче режет верхние призраки
+     * (квинтовые/октавные) ценой чуть большего числа пропусков на шуме.
+     * Для тюнера у грифа это правильный трейд-офф: лучше пропуск, чем врёт.
+     */
+    private val cutoff: Double = 0.97,
     /** Пики ниже даже не рассматриваем (TarsosDSP: 0.5). */
     private val smallCutoff: Double = 0.5,
     private val lowerPitchCutoffHz: Float = 50f, // ниже B1 (61.7) с запасом
@@ -49,21 +54,32 @@ class MpmPitchDetector(
         }
         if (periods.isEmpty()) return null
 
+        // Кандидаты по порядку (короткий период = высокая частота — первым).
+        // Проверка двойного периода: у настоящего фундаментала NSDF(2T) тоже силён
+        // (периодичность!), у дробного призрака вроде 2/3·T0 — слаб. Иначе врём квинту вверх.
         val actualCutoff = cutoff * highest
-        var periodIndex = 0
-        for (i in amps.indices) {
-            if (amps[i] >= actualCutoff) {
-                periodIndex = i
-                break
+        val candidates = amps.indices.filter { amps[it] >= actualCutoff }
+        for (idx in candidates) {
+            val period = periods[idx]
+            if (period <= 0.0) continue
+            if (doublePeriodOk(period, amps[idx])) {
+                val freq = (sampleRate / period).toFloat()
+                if (freq < lowerPitchCutoffHz || freq > upperPitchCutoffHz) return null
+                return Result(freq, highest.coerceIn(0.0, 1.0).toFloat())
             }
         }
-        val period = periods[periodIndex]
-        if (period <= 0.0) return null
+        return null // все кандидаты — призраки: честная тишина лучше вранья
+    }
 
-        val freq = (sampleRate / period).toFloat()
-        if (freq < lowerPitchCutoffHz || freq > upperPitchCutoffHz) return null
-
-        return Result(freq, highest.coerceIn(0.0, 1.0).toFloat())
+    /** NSDF(2T) линейной интерполяцией; true, если ≥40% амплитуды пика. */
+    private fun doublePeriodOk(period: Double, peakAmp: Double): Boolean {
+        val t2 = period * 2
+        val last = (bufferSize - 1).toDouble()
+        if (t2 >= last) return true // не проверяемо — доверяем
+        val i = t2.toInt()
+        val frac = t2 - i
+        val v = nsdf[i] * (1 - frac) + nsdf[i + 1] * frac
+        return v >= 0.4 * peakAmp
     }
 
     /** Нормализованная SDF: nsdf[tau] = 2*ACF / (E[x²]+E[y²]), в [-1, 1]. */
