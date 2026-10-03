@@ -12,16 +12,31 @@ android {
         applicationId = "com.dangler.tune"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
 
         vectorDrawables {
             useSupportLibrary = true
         }
     }
 
+    // Общий ключ банды: все сборки (CI и релизы) подписаны одинаково,
+    // иначе самообновление из приложения упиралось бы в конфликт подписей.
+    signingConfigs {
+        create("dangler") {
+            storeFile = rootProject.file("keystore/dangler.jks")
+            storePassword = "dangler123"
+            keyAlias = "dangler"
+            keyPassword = "dangler123"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("dangler")
+        }
         release {
+            signingConfig = signingConfigs.getByName("dangler")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
