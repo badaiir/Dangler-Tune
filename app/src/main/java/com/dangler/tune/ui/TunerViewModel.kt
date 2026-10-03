@@ -33,8 +33,8 @@ import kotlin.math.abs
 data class TunerState(
     val frequencyHz: Float = 0f,
     val clarity: Float = 0f,
-    val noteDisplay: String = "—",
-    val noteName: String = "—",
+    val noteDisplay: String = Tunings.DEFAULT.strings.maxBy { it.stringNumber }.name,
+    val noteName: String = Tunings.DEFAULT.strings.maxBy { it.stringNumber }.name,
     val cents: Float = 0f,          // -50..+50 относительно ближайшей ноты/струны
     val centsRelativeString: Float = 0f,
     val targetFreq: Float = 0f,
@@ -96,7 +96,11 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectTuning(t: Tuning) {
         freqWindow.clear()
-        _state.update { it.copy(tuning = t, activeString = null, hasSignal = false) }
+        // в тишине показываем корень строя гигантским — экран не пустует
+        val root = t.strings.maxBy { it.stringNumber }.name
+        _state.update {
+            it.copy(tuning = t, activeString = null, hasSignal = false, noteDisplay = root, noteName = root)
+        }
     }
 
     fun selectTheme(i: Int) { _state.update { it.copy(themeIndex = i) } }

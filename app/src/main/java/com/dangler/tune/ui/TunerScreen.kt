@@ -197,9 +197,11 @@ private fun TunerPage(
                             )
                         ) { Text("МИК", fontWeight = FontWeight.Black) }
                     } else {
+                        val sideName = state.activeString?.name
+                            ?: state.tuning.strings.maxBy { it.stringNumber }.name
                         Text(
-                            text = state.activeString?.name ?: "—",
-                            color = theme.textMain,
+                            text = sideName,
+                            color = if (state.activeString != null) theme.textMain else theme.textDim,
                             fontSize = 30.sp,
                             fontWeight = FontWeight.Black,
                         )
