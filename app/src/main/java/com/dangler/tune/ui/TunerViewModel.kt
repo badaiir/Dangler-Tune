@@ -14,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.dangler.tune.audio.AudioRecorder
 import com.dangler.tune.dsp.NoteUtils
 import com.dangler.tune.dsp.PitchPipeline
+import com.dangler.tune.dsp.StringTracker
 import com.dangler.tune.model.Tuning
 import com.dangler.tune.model.Tunings
 import com.dangler.tune.update.UpdateManager
@@ -46,6 +47,7 @@ data class TunerState(
     val permissionGranted: Boolean = false,
     val themeIndex: Int = 0,
     val hapticsEnabled: Boolean = true,
+    val stringLock: Boolean = true, // гитарный режим: залипать на струнах (кровь, без хроматики)
 )
 
 /** Состояние самообновления из GitHub Releases */
@@ -71,6 +73,7 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val recorder = AudioRecorder()
     private val pipeline = PitchPipeline()
+    private val tracker = StringTracker()
     private var noSignalJob: Job? = null
 
     fun onPermissionResult(granted: Boolean) {
@@ -87,6 +90,7 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectTuning(t: Tuning) {
         pipeline.reset()
+        tracker.reset()
         // в тишине показываем корень строя гигантским — экран не пустует
         val root = t.strings.maxBy { it.stringNumber }.name
         _state.update {
@@ -97,6 +101,10 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     fun selectTheme(i: Int) { _state.update { it.copy(themeIndex = i) } }
     fun setTolerance(c: Float) { _state.update { it.copy(toleranceCents = c) } }
     fun setHaptics(v: Boolean) { _state.update { it.copy(hapticsEnabled = v) } }
+    fun setStringLock(v: Boolean) {
+        tracker.reset()
+        _state.update { it.copy(stringLock = v, activeString = null) }
+    }
 
     fun start() {
         if (_state.value.isListening) return
@@ -126,8 +134,33 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     private fun onPitch(freq: Float, clarity: Float) {
         noSignalJob?.cancel()
 
-        // сглаживание уже внутри PitchPipeline (медиана + атака/релиз) — здесь сразу нота
         val tuning = _state.value.tuning
+        val tol = _state.value.toleranceCents
+
+        if (_state.value.stringLock) {
+            // ГИТАРНЫЙ РЕЖИМ: только струны строя, залипание с гистерезисом.
+            // Мусор между струнами — игнор, экран стоит и не скачет.
+            val tracked = tracker.update(freq, tuning) ?: return
+            val clamped = tracked.cents.coerceIn(-75f, 75f)
+            val inTune = abs(clamped) <= tol && clarity > 0.55f
+            _state.update {
+                it.copy(
+                    frequencyHz = freq,
+                    clarity = clarity,
+                    noteDisplay = tracked.string.name,
+                    noteName = tracked.string.name,
+                    cents = clamped,
+                    targetFreq = tracked.string.frequencyHz,
+                    activeString = tracked.string,
+                    noteInTuning = true, // всегда своя — всегда кровь
+                    hasSignal = true,
+                    inTune = inTune,
+                )
+            }
+            return
+        }
+
+        // ХРОМАТИКА (опция): любая нота, чужие — янтарём.
         val nearestString = NoteUtils.nearestString(freq, tuning)
 
         val note = NoteUtils.freqToNote(freq)
@@ -135,7 +168,6 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
         val clamped = note.cents.coerceIn(-50f, 50f)
         // своя или нет: имя ноты есть среди струн строя?
         val inTuning = tuning.strings.any { it.name == note.display }
-        val tol = _state.value.toleranceCents
         val inTune = abs(clamped) <= tol && clarity > 0.55f
 
         _state.update {

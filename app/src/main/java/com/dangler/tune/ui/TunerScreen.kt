@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.Button
@@ -379,6 +380,18 @@ private fun SettingsPage(
             textDim = theme.textDim,
         )
 
+        SettingsSectionLabel("РЕЖИМ", theme.textDim)
+        DanglerSwitchRow(
+            title = "Держаться струн",
+            subtitle = "Залипание на струнах строя — кровь, без скачков",
+            icon = Icons.Default.MusicNote,
+            isChecked = state.stringLock,
+            onCheckedChange = { vm.setStringLock(it) },
+            surface = Color.White.copy(alpha = 0.05f),
+            textMain = theme.textMain,
+            textDim = theme.textDim,
+            accent = theme.blood,
+        )
         SettingsSectionLabel("ЭФФЕКТЫ", theme.textDim)
         DanglerSwitchRow(
             title = "Вибрация",
