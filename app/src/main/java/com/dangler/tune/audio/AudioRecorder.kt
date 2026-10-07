@@ -12,7 +12,13 @@ import kotlinx.coroutines.launch
 
 /**
  * Захват микрофона: 44100 Гц, mono, 16-bit.
- * Отдает float-кадры [-1, 1] размером frameSize в реальном времени.
+ * Отдает float-кадры [-1, 1] в реальном времени, кусками как пришло
+ * (аккумулятор и нарезка окон — в PitchPipeline, пропусков нет).
+ *
+ * КРИТИЧНО для тюнера: источник UNPROCESSED (сырой микрофон без шумодава/АРУ).
+ * Обычный MIC на многих телефонах включает NoiseSuppressor + AGC, которые
+ * модулируют сигнал и ломают периодичность — тюнер врёт и скачет.
+ * Фолбэк: VOICE_RECOGNITION (тоже без обработок) → MIC.
  */
 class AudioRecorder(
     val sampleRate: Int = 44100,
@@ -21,22 +27,37 @@ class AudioRecorder(
     private var record: AudioRecord? = null
     private var job: Job? = null
 
-    @SuppressLint("MissingPermission")
-    fun start(scope: CoroutineScope, onFrame: (FloatArray) -> Unit) {
-        stop()
+    private fun createRecord(): AudioRecord {
         val minBuf = AudioRecord.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         ).coerceAtLeast(frameSize * 2)
-        record = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBuf * 2
+        val sources = listOf(
+            MediaRecorder.AudioSource.UNPROCESSED, // API 24+, сырец
+            MediaRecorder.AudioSource.VOICE_RECOGNITION, // без обработок
+            MediaRecorder.AudioSource.MIC, // последний шанс
         )
-        record?.startRecording()
+        var lastError: Exception? = null
+        for (src in sources) {
+            try {
+                val rec = AudioRecord(src, sampleRate, AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT, minBuf * 2)
+                if (rec.state == AudioRecord.STATE_INITIALIZED) return rec
+                try { rec.release() } catch (_: Exception) {}
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        throw lastError ?: IllegalStateException("AudioRecord init failed")
+    }
+
+    @SuppressLint("MissingPermission")
+    fun start(scope: CoroutineScope, onFrame: (FloatArray) -> Unit) {
+        stop()
+        val rec = createRecord()
+        record = rec
+        rec.startRecording()
         job = scope.launch(Dispatchers.Default) {
             val shortBuf = ShortArray(frameSize)
             val floatBuf = FloatArray(frameSize)

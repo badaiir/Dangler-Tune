@@ -14,8 +14,8 @@ package com.dangler.tune.dsp
  * 4. Удаление DC (вычет среднего): смещение микрофона иначе косит NSDF.
  * 5. RMS-gate против тишины/шума.
  * 6. MPM + clarity-gate.
- * 7. Трекер: медиана-5 против выбросов, быстрая атака (скачок >25¢ — сразу),
- *    медленный релиз (EMA 0.35) — нота переключается быстро, игла не дрожит.
+ * 7. Трекер: медиана-3 против выбросов, быстрая атака (скачок >20¢ — сразу),
+ *    живой релиз (EMA 0.45) — нота переключается мгновенно, игла не дрожит.
  */
 class PitchPipeline(
     private val inputSampleRate: Int = 44100,
@@ -24,8 +24,9 @@ class PitchPipeline(
     private val hopSize: Int = 1024,      // в даунсемплированных сэмплах
     private val rmsGate: Float = 0.006f,
     private val clarityGate: Float = 0.55f,
-    private val attackCents: Float = 25f,
-    private val releaseAlpha: Float = 0.35f,
+    private val attackCents: Float = 20f,
+    private val releaseAlpha: Float = 0.45f,
+    private val medianSize: Int = 3,
 ) {
     data class Reading(val frequencyHz: Float, val clarity: Float)
 
@@ -121,9 +122,9 @@ class PitchPipeline(
             medians.clear() // чужая тихая нота — забываем старое, захватываем заново
         }
 
-        // медиана-5
+        // медиана против выбросов
         medians.addLast(res.frequencyHz)
-        if (medians.size > 5) medians.removeFirst()
+        if (medians.size > medianSize) medians.removeFirst()
         val sorted = medians.sorted()
         val med = sorted[sorted.size / 2]
 
