@@ -1,12 +1,12 @@
-package com.dangler.tune.dsp
+package com.dangler.tune.tuner
 
 import kotlin.math.abs
 import kotlin.math.log2
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-/** Ноты, центы, MIDI-утилиты */
-object NoteUtils {
+/** Математика нот: частота ↔ MIDI ↔ центы. Никаких струн и строёв. */
+object NoteMath {
     val NOTE_NAMES_SHARP = arrayOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
     data class NoteInfo(
@@ -28,14 +28,11 @@ object NoteUtils {
         return NoteInfo(midi, name, octave, "$name$octave", target, cents)
     }
 
-    /** Ближайшая струна строя к услышанной частоте (в пределах +-6 полутонов) */
-    fun nearestString(freqHz: Float, tuning: com.dangler.tune.model.Tuning): com.dangler.tune.model.Tuning.StringNote? {
-        return tuning.strings.minByOrNull {
-            abs(12 * log2(freqHz / it.frequencyHz))
-        }
-    }
-
-    /** Центы относительно конкретной струны (для режима "по струнам") */
+    /** Центы относительно конкретной частоты (струны). */
     fun centsRelativeTo(freqHz: Float, targetHz: Float): Float =
         (1200 * log2(freqHz / targetHz)).toFloat()
+
+    /** Расстояние между частотами в полутонах (без знака). */
+    fun semitonesBetween(freqHz: Float, targetHz: Float): Float =
+        abs(12 * log2(freqHz / targetHz))
 }

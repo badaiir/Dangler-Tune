@@ -1,7 +1,8 @@
 name: Release APK
 
-# Релиз: bump versionName/versionCode → коммит → git tag vX.Y → push --tags.
-# Приложение само подтянет APK через экран Настройки → Обновление.
+# Релиз: git tag vX.Y && git push origin vX.Y
+# Версию внутрь APK подставляет CI из тега — вручную versionName не бампаем.
+# Приложение само подтянет APK: Настройки → Обновление.
 on:
   push:
     tags:
@@ -27,18 +28,61 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Build debug APK
+      - name: Unit tests (DSP + tuner)
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew :core:dsp:test :core:tuner:test :app:testDebugUnitTest --stacktrace
+
+      - name: Resolve version from tag
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          MAJOR="${MAJOR:-0}"; MINOR="${MINOR:-0}"; PATCH="${PATCH:-0}"
+          CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "APK version: $VERSION ($CODE)"
+
+      - name: Build signed release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease \
+            -PversionName="${{ steps.version.outputs.name }}" \
+            -PversionCode="${{ steps.version.outputs.code }}" \
+            --stacktrace
+
+      - name: Verify APK version and signature
+        run: |
+          APK="app/build/outputs/apk/release/app-release.apk"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          BADGING=$("$BUILD_TOOLS/aapt" dump badging "$APK" | head -1)
+          echo "$BADGING"
+          echo "$BADGING" | grep -q "versionName='${{ steps.version.outputs.name }}'"
+          echo "$BADGING" | grep -q "versionCode='${{ steps.version.outputs.code }}'"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          APK="DanglerTune-${TAG}.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
-          gh release create "$TAG" "$APK" \
+          TAG="${{ steps.version.outputs.tag }}"
+          APK_NAME="DanglerTune-${TAG}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK_NAME"
+          SHA=$(sha256sum "$APK_NAME" | cut -d' ' -f1)
+          NOTES=$(cat <<EOF
+          🩸 Брутальный тюнер Dangler.
+
+          Установка: скачай APK или открой Настройки → Обновление → Проверить.
+          Android покажет системное подтверждение установки — это нормально.
+
+          SHA-256: $SHA
+          EOF
+          )
+          gh release create "$TAG" "$APK_NAME" \
             --title "Dangler Tune $TAG" \
-            --notes "🩸 Брутальный тюнер Dangler. Ставь поверх — приложение умеет обновляться само (Настройки → Обновление)."
+            --notes "$NOTES" \
+            --latest

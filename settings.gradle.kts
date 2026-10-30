@@ -14,3 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Dangler-Tune"
 include(":app")
+include(":core:dsp")
+include(":core:tuner")

@@ -150,7 +150,7 @@ class PitchPipelineTest {
         val pipe = PitchPipeline()
         val zeros = FloatArray(44100) // 1с тишины
         var j = 0
-        var got: PitchPipeline.Reading? = null
+        var got: PitchReading? = null
         while (j < zeros.size) {
             pipe.push(zeros.copyOfRange(j, minOf(j + 4096, zeros.size)))?.let { got = it }
             j += 4096

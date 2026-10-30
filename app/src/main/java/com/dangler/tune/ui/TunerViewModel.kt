@@ -2,6 +2,7 @@ package com.dangler.tune.ui
 
 import android.Manifest
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -12,11 +13,9 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dangler.tune.audio.AudioRecorder
-import com.dangler.tune.dsp.NoteUtils
-import com.dangler.tune.dsp.PitchPipeline
-import com.dangler.tune.dsp.StringTracker
-import com.dangler.tune.model.Tuning
-import com.dangler.tune.model.Tunings
+import com.dangler.tune.tuner.TunerEngine
+import com.dangler.tune.tuner.Tuning
+import com.dangler.tune.tuner.Tunings
 import com.dangler.tune.update.UpdateManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,14 +27,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.abs
 
 data class TunerState(
     val frequencyHz: Float = 0f,
     val clarity: Float = 0f,
-    val noteDisplay: String = Tunings.DEFAULT.strings.maxBy { it.stringNumber }.name,
-    val noteName: String = Tunings.DEFAULT.strings.maxBy { it.stringNumber }.name,
-    val cents: Float = 0f,          // хроматические, -50..+50 относительно ближайшей ноты 12-TET
+    val noteName: String = Tunings.DEFAULT.rootString.name,
+    val cents: Float = 0f,          // гитарный режим: от струны; хроматика: от ноты 12-TET
     val targetFreq: Float = 0f,
     val activeString: Tuning.StringNote? = null,  // ближайшая струна строя (для подсветки)
     val noteInTuning: Boolean = true,            // нота входит в текущий строй?
@@ -57,10 +54,12 @@ sealed interface UpdateUiState {
     data object UpToDate : UpdateUiState
     data class Available(val info: UpdateManager.ReleaseInfo) : UpdateUiState
     data class Downloading(val progress: Float) : UpdateUiState
-    /** APK скачан, но системе запрещено ставить из неизвестных источников */
-    data object NeedsUnknownSources : UpdateUiState
-    data object Installing : UpdateUiState
-    data class Error(val message: String) : UpdateUiState
+    /** Нужно разрешение системы на установку из этого приложения. */
+    data class NeedsUnknownSources(val info: UpdateManager.ReleaseInfo) : UpdateUiState
+    /** APK скачан, проверен и ждёт подтверждения в системном установщике. */
+    data class ReadyToInstall(val info: UpdateManager.ReleaseInfo) : UpdateUiState
+    data class Installing(val info: UpdateManager.ReleaseInfo) : UpdateUiState
+    data class Error(val message: String, val info: UpdateManager.ReleaseInfo? = null) : UpdateUiState
 }
 
 class TunerViewModel(application: Application) : AndroidViewModel(application) {
@@ -70,57 +69,115 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _update = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val update: StateFlow<UpdateUiState> = _update.asStateFlow()
+    private var lastUpdateCheckAt = 0L
 
-    private val recorder = AudioRecorder()
-    private val pipeline = PitchPipeline()
-    private val tracker = StringTracker()
+    // Вся музыка и DSP — в :core:tuner / :core:dsp. Здесь только склейка.
+    private val engine = TunerEngine()
+    private val recorder = AudioRecorder(sampleRate = TunerEngine.INPUT_SAMPLE_RATE)
     private var noSignalJob: Job? = null
+
+    // ── жизненный цикл ──
+
+    /** Вызывается из Activity.onStart: вернулись в приложение — снова слушаем. */
+    fun onStart() {
+        if (_state.value.permissionGranted) start()
+        resumeUpdate()
+    }
+
+    /** Возврат из системных настроек/установщика: докручиваем прерванный апдейт. */
+    private fun resumeUpdate() {
+        when (val u = _update.value) {
+            is UpdateUiState.NeedsUnknownSources -> if (canInstallUnknown()) downloadUpdate(u.info)
+            // Вернулись из установщика, версия не сменилась → установку отменили.
+            // Если установка удалась, процесс уже новый и сюда не попадёт.
+            is UpdateUiState.Installing -> _update.value = UpdateUiState.ReadyToInstall(u.info)
+            else -> Unit
+        }
+    }
+
+    /** Вызывается из Activity.onStop: микрофон отпускаем, батарею не жжём. */
+    fun onStop() {
+        stop()
+    }
 
     fun onPermissionResult(granted: Boolean) {
         _state.update { it.copy(permissionGranted = granted) }
         if (granted) start()
     }
 
-    fun checkPermission(context: android.content.Context) {
-        val g = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+    fun checkPermission(context: Context) {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
-        _state.update { it.copy(permissionGranted = g) }
-        if (g) start()
-    }
-
-    fun selectTuning(t: Tuning) {
-        pipeline.reset()
-        tracker.reset()
-        // в тишине показываем корень строя гигантским — экран не пустует
-        val root = t.strings.maxBy { it.stringNumber }.name
-        _state.update {
-            it.copy(tuning = t, activeString = null, hasSignal = false, noteDisplay = root, noteName = root, noteInTuning = true)
-        }
-    }
-
-    fun selectTheme(i: Int) { _state.update { it.copy(themeIndex = i) } }
-    fun setTolerance(c: Float) { _state.update { it.copy(toleranceCents = c) } }
-    fun setHaptics(v: Boolean) { _state.update { it.copy(hapticsEnabled = v) } }
-    fun setStringLock(v: Boolean) {
-        tracker.reset()
-        _state.update { it.copy(stringLock = v, activeString = null) }
+        _state.update { it.copy(permissionGranted = granted) }
+        if (granted) start()
     }
 
     fun start() {
-        if (_state.value.isListening) return
+        if (_state.value.isListening || !_state.value.permissionGranted) return
+        engine.reset()
         _state.update { it.copy(isListening = true) }
-        pipeline.reset()
-        recorder.start(viewModelScope) { frame ->
-            val reading = pipeline.push(frame)
-            if (reading != null) onPitch(reading.frequencyHz, reading.clarity)
-            else markNoSignalSoon()
-        }
+        recorder.start(
+            scope = viewModelScope,
+            onFrame = { frame ->
+                // null = нет кадра, тишина или мусор между струнами.
+                // Во всех случаях сигнал должен погаснуть — иначе экран залипает.
+                val reading = engine.push(frame)
+                if (reading != null) onReading(reading) else markNoSignalSoon()
+            },
+            onError = {
+                // Микрофон отобрали/сломался — честно показываем «не слушаем».
+                viewModelScope.launch(Dispatchers.Main) {
+                    _state.update { it.copy(isListening = false, hasSignal = false, inTune = false) }
+                }
+            },
+        )
     }
 
     fun stop() {
         recorder.stop()
-        _state.update { it.copy(isListening = false, hasSignal = false) }
+        noSignalJob?.cancel()
+        noSignalJob = null
+        _state.update { it.copy(isListening = false, hasSignal = false, inTune = false) }
     }
+
+    // ── настройки ──
+
+    fun selectTuning(t: Tuning) {
+        engine.selectTuning(t)
+        val root = t.rootString.name
+        _state.update {
+            it.copy(
+                tuning = t,
+                activeString = null,
+                hasSignal = false,
+                inTune = false,
+                frequencyHz = 0f,
+                clarity = 0f,
+                cents = 0f,
+                targetFreq = 0f,
+                noteName = root,
+                noteInTuning = true,
+            )
+        }
+    }
+
+    fun selectTheme(i: Int) { _state.update { it.copy(themeIndex = i) } }
+
+    fun setTolerance(c: Float) {
+        engine.setTolerance(c)
+        _state.update { it.copy(toleranceCents = c) }
+    }
+
+    fun setHaptics(v: Boolean) { _state.update { it.copy(hapticsEnabled = v) } }
+
+    fun setStringLock(v: Boolean) {
+        engine.setStringLock(v)
+        _state.update {
+            it.copy(stringLock = v, activeString = null, hasSignal = false, inTune = false)
+        }
+    }
+
+    // ── чтение с движка ──
 
     private fun markNoSignalSoon() {
         // дебаунс короткий — буквы меняются быстро
@@ -131,78 +188,58 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun onPitch(freq: Float, clarity: Float) {
+    private fun onReading(reading: TunerEngine.Reading) {
         noSignalJob?.cancel()
-
-        val tuning = _state.value.tuning
-        val tol = _state.value.toleranceCents
-
-        if (_state.value.stringLock) {
-            // ГИТАРНЫЙ РЕЖИМ: только струны строя, залипание с гистерезисом.
-            // Мусор между струнами — игнор, экран стоит и не скачет.
-            val tracked = tracker.update(freq, tuning) ?: return
-            val clamped = tracked.cents.coerceIn(-75f, 75f)
-            val inTune = abs(clamped) <= tol && clarity > 0.55f
-            _state.update {
-                it.copy(
-                    frequencyHz = freq,
-                    clarity = clarity,
-                    noteDisplay = tracked.string.name,
-                    noteName = tracked.string.name,
-                    cents = clamped,
-                    targetFreq = tracked.string.frequencyHz,
-                    activeString = tracked.string,
-                    noteInTuning = true, // всегда своя — всегда кровь
-                    hasSignal = true,
-                    inTune = inTune,
-                )
-            }
-            return
-        }
-
-        // ХРОМАТИКА (опция): любая нота, чужие — янтарём.
-        val nearestString = NoteUtils.nearestString(freq, tuning)
-
-        val note = NoteUtils.freqToNote(freq)
-        // хроматика: центы всегда относительно ближайшей ноты 12-TET — осмысленны для любой ноты
-        val clamped = note.cents.coerceIn(-50f, 50f)
-        // своя или нет: имя ноты есть среди струн строя?
-        val inTuning = tuning.strings.any { it.name == note.display }
-        val inTune = abs(clamped) <= tol && clarity > 0.55f
-
         _state.update {
             it.copy(
-                frequencyHz = freq,
-                clarity = clarity,
-                noteDisplay = note.display,
-                noteName = note.display,
-                cents = clamped,
-                targetFreq = note.targetFreq,
-                activeString = nearestString,
-                noteInTuning = inTuning,
+                frequencyHz = reading.frequencyHz,
+                clarity = reading.clarity,
+                noteName = reading.noteName,
+                cents = reading.cents,
+                targetFreq = reading.targetHz,
+                activeString = reading.activeString,
+                noteInTuning = reading.noteInTuning,
                 hasSignal = true,
-                inTune = inTune,
+                inTune = reading.inTune,
             )
         }
     }
 
     // ── самообновление ──
 
-    private fun updateApkFile() = File(getApplication<Application>().cacheDir, "dangler-update.apk")
-
-    fun currentVersion(): String = try {
-        val app = getApplication<Application>()
-        @Suppress("DEPRECATION")
-        app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "?"
-    } catch (_: Exception) {
-        "?"
+    private fun updateApkFile(): File {
+        val dir = File(getApplication<Application>().cacheDir, "updates").apply { mkdirs() }
+        return File(dir, "dangler-update.apk")
     }
 
-    private fun appVersion(): String = currentVersion()
+    private val versionName: String by lazy {
+        try {
+            val app = getApplication<Application>()
+            @Suppress("DEPRECATION")
+            app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "?"
+        } catch (_: Exception) {
+            "?"
+        }
+    }
+
+    fun currentVersion(): String = versionName
 
     /** manual=true → показываем UpToDate/Error, иначе молча (только бейдж при Available) */
     fun checkForUpdate(manual: Boolean = false) {
-        if (_update.value is UpdateUiState.Checking || _update.value is UpdateUiState.Downloading) return
+        val current = _update.value
+        if (current is UpdateUiState.Checking ||
+            current is UpdateUiState.Downloading ||
+            current is UpdateUiState.Installing
+        ) return
+        if (!manual && (current is UpdateUiState.Available ||
+                current is UpdateUiState.ReadyToInstall ||
+                current is UpdateUiState.NeedsUnknownSources)
+        ) return
+        // Тихая проверка не чаще раза в минуту: старт + открытие настроек не спамят GitHub.
+        val now = System.currentTimeMillis()
+        if (!manual && now - lastUpdateCheckAt < 60_000L) return
+        lastUpdateCheckAt = now
+
         _update.value = UpdateUiState.Checking
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -210,7 +247,7 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
                 val next: UpdateUiState = when {
                     rel == null ->
                         if (manual) UpdateUiState.Error("Релизов пока нет") else UpdateUiState.Idle
-                    UpdateManager.isNewer(rel.version, appVersion()) ->
+                    UpdateManager.isNewer(rel.version, currentVersion()) ->
                         UpdateUiState.Available(rel)
                     else ->
                         if (manual) UpdateUiState.UpToDate else UpdateUiState.Idle
@@ -226,37 +263,75 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun downloadUpdate(info: UpdateManager.ReleaseInfo) {
+        val app = getApplication<Application>()
+        if (!canInstallUnknown()) {
+            _update.value = UpdateUiState.NeedsUnknownSources(info)
+            return
+        }
+
         _update.value = UpdateUiState.Downloading(0f)
         viewModelScope.launch(Dispatchers.IO) {
+            val apk = updateApkFile()
             try {
-                UpdateManager.downloadApk(info.apkUrl, updateApkFile()) { p ->
+                UpdateManager.downloadApk(info.apkUrl, apk, info.sha256) { p ->
                     _update.value = UpdateUiState.Downloading(p)
                 }
-                withContext(Dispatchers.Main) { fireInstall() }
-            } catch (e: Exception) {
+                val problem = UpdateManager.verifyApk(app, apk)
+                if (problem != null) {
+                    apk.delete()
+                    withContext(Dispatchers.Main) {
+                        _update.value = UpdateUiState.Error(problem, info)
+                    }
+                    return@launch
+                }
                 withContext(Dispatchers.Main) {
-                    _update.value = UpdateUiState.Error("Скачивание сорвалось: ${e.message}")
+                    _update.value = UpdateUiState.ReadyToInstall(info)
+                    fireInstall()
+                }
+            } catch (e: Exception) {
+                apk.delete()
+                withContext(Dispatchers.Main) {
+                    _update.value = UpdateUiState.Error("Скачивание сорвалось: ${e.message}", info)
                 }
             }
         }
     }
 
     fun canInstallUnknown(): Boolean =
-        getApplication<Application>().packageManager.canRequestPackageInstalls()
+        Build.VERSION.SDK_INT < 26 ||
+            getApplication<Application>().packageManager.canRequestPackageInstalls()
 
     /** Установка скачанного APK; если нет права — ведём в настройки системы */
     fun fireInstall() {
         val app = getApplication<Application>()
-        if (Build.VERSION.SDK_INT >= 26 && !app.packageManager.canRequestPackageInstalls()) {
-            _update.value = UpdateUiState.NeedsUnknownSources
+        val info = when (val u = _update.value) {
+            is UpdateUiState.ReadyToInstall -> u.info
+            is UpdateUiState.NeedsUnknownSources -> u.info
+            is UpdateUiState.Installing -> u.info
+            else -> null
+        }
+        if (!canInstallUnknown()) {
+            if (info != null) _update.value = UpdateUiState.NeedsUnknownSources(info)
             return
         }
-        val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", updateApkFile())
+        if (info == null) {
+            _update.value = UpdateUiState.Error("Нет данных о релизе")
+            return
+        }
+
+        val apk = updateApkFile()
+        val problem = UpdateManager.verifyApk(app, apk)
+        if (problem != null) {
+            apk.delete()
+            _update.value = UpdateUiState.Error(problem, info)
+            return
+        }
+        val uri = FileProvider.getUriForFile(app, "${app.packageName}.fileprovider", apk)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        _update.value = UpdateUiState.Installing
+        _update.value = UpdateUiState.Installing(info)
         app.startActivity(intent)
     }
 
@@ -269,9 +344,6 @@ class TunerViewModel(application: Application) : AndroidViewModel(application) {
         app.startActivity(intent)
     }
 
-    fun resetUpdateState() {
-        if (_update.value !is UpdateUiState.Downloading) _update.value = UpdateUiState.Idle
-    }
 
     override fun onCleared() {
         recorder.stop()

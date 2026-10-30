@@ -57,8 +57,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.dangler.tune.model.Tuning
-import com.dangler.tune.model.Tunings
+import com.dangler.tune.tuner.Tuning
+import com.dangler.tune.tuner.Tunings
 import com.dangler.tune.ui.components.BloodNote
 import com.dangler.tune.ui.components.DanglerSliderRow
 import com.dangler.tune.ui.components.DanglerSwitchRow
@@ -347,6 +347,9 @@ private fun SettingsPage(
 ) {
     val update by vm.update.collectAsState()
 
+    // Открыли настройки — тихо проверяем ещё раз (в VM есть троттлинг).
+    LaunchedEffect(Unit) { vm.checkForUpdate(manual = false) }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -413,6 +416,7 @@ private fun SettingsPage(
 @Composable
 private fun UpdateBlock(vm: TunerViewModel, theme: DanglerTheme) {
     val update by vm.update.collectAsState()
+    val currentVersion = remember { vm.currentVersion() }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
@@ -420,7 +424,7 @@ private fun UpdateBlock(vm: TunerViewModel, theme: DanglerTheme) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MonoLabel("ТЕКУЩАЯ: v${vm.currentVersion()}", color = theme.textDim, fontSize = 11)
+            MonoLabel("ТЕКУЩАЯ: v$currentVersion", color = theme.textDim, fontSize = 11)
             if (update !is UpdateUiState.Checking && update !is UpdateUiState.Downloading) {
                 Row(
                     Modifier
@@ -464,13 +468,23 @@ private fun UpdateBlock(vm: TunerViewModel, theme: DanglerTheme) {
                 )
             }
             is UpdateUiState.NeedsUnknownSources -> {
-                MonoLabel("разреши установку из неизвестных источников", color = theme.flat, fontSize = 11)
-                BigRedButton("ОТКРЫТЬ НАСТРОЙКИ", theme) { vm.openUnknownSourcesSettings() }
-                MonoLabel("потом жми установку ещё раз", color = theme.textDim, fontSize = 10)
-                BigRedButton("УСТАНОВИТЬ", theme) { vm.fireInstall() }
+                MonoLabel("нужно разрешить установку из этого приложения", color = theme.flat, fontSize = 11)
+                BigRedButton("РАЗРЕШИТЬ В НАСТРОЙКАХ", theme) { vm.openUnknownSourcesSettings() }
+                MonoLabel("вернись в приложение — скачивание начнётся само", color = theme.textDim, fontSize = 10)
+            }
+            is UpdateUiState.ReadyToInstall -> {
+                MonoLabel("APK скачан и проверен — жми установку", color = theme.accent, fontSize = 11, bold = true)
+                BigRedButton("УСТАНОВИТЬ ${u.info.version.uppercase()}", theme) { vm.fireInstall() }
             }
             is UpdateUiState.Installing -> MonoLabel("ставлю… подтверди в системе", color = theme.textDim, fontSize = 11)
-            is UpdateUiState.Error -> MonoLabel(u.message, color = theme.sharp, fontSize = 11)
+            is UpdateUiState.Error -> {
+                MonoLabel(u.message, color = theme.sharp, fontSize = 11)
+                if (u.info != null) {
+                    BigRedButton("ПОВТОРИТЬ СКАЧИВАНИЕ", theme) { vm.downloadUpdate(u.info) }
+                } else {
+                    BigRedButton("ПРОВЕРИТЬ ЕЩЁ РАЗ", theme) { vm.checkForUpdate(manual = true) }
+                }
+            }
         }
     }
 }

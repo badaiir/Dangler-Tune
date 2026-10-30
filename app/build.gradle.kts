@@ -4,6 +4,11 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// CI подставляет версию из тега: ./gradlew assembleRelease -PversionName=1.13 -PversionCode=11300.
+// Локальная сборка без флагов берёт дефолт ниже.
+val injectedVersionName = providers.gradleProperty("versionName").orNull
+val injectedVersionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull()
+
 android {
     namespace = "com.dangler.tune"
     compileSdk = 36
@@ -12,8 +17,8 @@ android {
         applicationId = "com.dangler.tune"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.12"
+        versionCode = injectedVersionCode ?: 14
+        versionName = injectedVersionName ?: "1.13"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -57,6 +62,9 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:dsp"))
+    implementation(project(":core:tuner"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.lifecycle.runtime)
     implementation(libs.lifecycle.viewmodel)
@@ -70,5 +78,5 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }

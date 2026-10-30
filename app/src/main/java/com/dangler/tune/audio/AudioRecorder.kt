@@ -7,11 +7,12 @@ import android.media.MediaRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Захват микрофона: 44100 Гц, mono, 16-bit.
+ * Захват микрофона: mono, 16-bit.
  * Отдает float-кадры [-1, 1] в реальном времени, кусками как пришло
  * (аккумулятор и нарезка окон — в PitchPipeline, пропусков нет).
  *
@@ -21,9 +22,10 @@ import kotlinx.coroutines.launch
  * Фолбэк: VOICE_RECOGNITION (тоже без обработок) → MIC.
  */
 class AudioRecorder(
-    val sampleRate: Int = 44100,
+    val sampleRate: Int,
     val frameSize: Int = 4096,
 ) {
+    @Volatile
     private var record: AudioRecord? = null
     private var job: Job? = null
 
@@ -52,32 +54,77 @@ class AudioRecorder(
         throw lastError ?: IllegalStateException("AudioRecord init failed")
     }
 
+    /**
+     * @param onError вызывается на фоновом потоке, если захват сорвался
+     * (микрофон отобрали, гарнитуру выдернули, read вернул ошибку).
+     */
     @SuppressLint("MissingPermission")
-    fun start(scope: CoroutineScope, onFrame: (FloatArray) -> Unit) {
+    @Synchronized
+    fun start(
+        scope: CoroutineScope,
+        onFrame: (FloatArray) -> Unit,
+        onError: (Throwable) -> Unit = {},
+    ) {
         stop()
-        val rec = createRecord()
+        val rec = try {
+            createRecord()
+        } catch (e: Exception) {
+            onError(e)
+            return
+        }
         record = rec
-        rec.startRecording()
+        try {
+            rec.startRecording()
+        } catch (e: Exception) {
+            stop()
+            onError(e)
+            return
+        }
+
         job = scope.launch(Dispatchers.Default) {
             val shortBuf = ShortArray(frameSize)
             val floatBuf = FloatArray(frameSize)
+            var failure: Throwable? = null
+
             while (isActive) {
-                val rec = record ?: break
-                val read = rec.read(shortBuf, 0, frameSize)
+                val read = try {
+                    rec.read(shortBuf, 0, frameSize)
+                } catch (e: Exception) {
+                    failure = e
+                    break
+                }
                 if (read > 0) {
                     for (i in 0 until read) floatBuf[i] = shortBuf[i] / 32768f
                     // копия, т.к. буфер переиспользуется
                     onFrame(floatBuf.copyOf(read))
+                } else if (read < 0) {
+                    failure = IllegalStateException("AudioRecord.read error $read")
+                    break
+                } else {
+                    // read == 0: данных пока нет. Без паузы это busy-loop,
+                    // который жрёт ядро и мешает DSP-потоку.
+                    delay(5)
                 }
+            }
+
+            if (failure != null) {
+                release(rec)
+                onError(failure)
             }
         }
     }
 
+    @Synchronized
     fun stop() {
         job?.cancel()
         job = null
-        try { record?.stop() } catch (_: Exception) {}
-        try { record?.release() } catch (_: Exception) {}
+        record?.let { release(it) }
         record = null
+    }
+
+    private fun release(rec: AudioRecord) {
+        try { rec.stop() } catch (_: Exception) {}
+        try { rec.release() } catch (_: Exception) {}
+        if (record === rec) record = null
     }
 }

@@ -1,13 +1,9 @@
-package com.dangler.tune.model
+package com.dangler.tune.tuner
 
-/** Одна струна строя */
-data class GuitarString(
-    val label: String,   // "1", "2"... или "B1"
-    val noteName: String,// "B"
-    val octave: Int,
-    val frequencyHz: Float,
-)
+import kotlin.math.abs
+import kotlin.math.log2
 
+/** Один строй: список струн и удобные запросы по ним. */
 data class Tuning(
     val id: String,
     val name: String,        // "Drop B"
@@ -19,6 +15,13 @@ data class Tuning(
         val name: String,      // "B1"
         val frequencyHz: Float,
     )
+
+    /** Самая толстая струна — корень строя, его показываем в тишине. */
+    val rootString: StringNote get() = strings.maxBy { it.stringNumber }
+
+    /** Ближайшая струна к услышанной частоте. */
+    fun nearestString(freqHz: Float): StringNote =
+        strings.minBy { abs(12 * log2(freqHz / it.frequencyHz)) }
 }
 
 private fun s(num: Int, name: String, freq: Float) = Tuning.StringNote(num, name, freq)
